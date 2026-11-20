@@ -1,0 +1,53 @@
+[package]
+license = "Apache-2.0"
+repository = "https://github.com/mkrotel14/stonks-chat-app"
+name = "stonks-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+native-voice = ["dep:livekit", "dep:cxx", "dep:webrtc-sys", "dep:livekit-protocol", "dep:nnnoiseless", "dep:wasapi", "dep:windows", "dep:ashpd", "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "tokio/rt", "tokio-util/rt"]
+media-playback = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
+
+[dependencies]
+keyring = { version = "3.6", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+rodio = { version = "0.23.0", default-features = false, features = ["symphonia-all"] }
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
+url = "2.5"
+futures-util = "0.3"
+libc = "0.2"
+tokio-util = { version = "0.7", features = ["io"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "sync", "time"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", features = ["crypto-rust", "linux-native-sync-persistent"] }
+gstreamer = { version = "=0.25.4", features = ["v1_28"], optional = true }
+gstreamer-app = { version = "=0.25.2", features = ["v1_28"], optional = true }
+gstreamer-video = { version = "=0.25.4", features = ["v1_28"], optional = true }
+
+# GPUI also uses ashpd with async-io; ashpd forbids unifying both runtimes.
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "screencast"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+cxx = { version = "1", optional = true }
+webrtc-sys = { version = "=0.3.46", path = "../../vendor/webrtc-sys", optional = true }
+keyring = { version = "3.6", features = ["windows-native"] }
+rodio = { version = "0.23.0", default-features = false, features = ["playback"] }
+wasapi = { version = "0.26.0", optional = true }
+windows = { version = "0.62.2", features = ["Win32_Media_Audio"], optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+livekit = { version = "=0.9.2", path = "../../vendor/livekit", features = ["rustls-tls-webpki-roots"], optional = true }
+livekit-protocol = { version = "0.7.13", path = "../../vendor/livekit-protocol", optional = true }
+nnnoiseless = { version = "0.5.1", default-features = false, optional = true }
+
+[patch.crates-io]
+livekit-protocol = { path = "../../vendor/livekit-protocol" }
+webrtc-sys = { path = "../../vendor/webrtc-sys" }

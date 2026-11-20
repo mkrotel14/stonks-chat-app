@@ -1,0 +1,2 @@
+# Keep scripts, lockfiles, and source-based checks consistent on Windows and Linux.
+* text=auto eol=lf

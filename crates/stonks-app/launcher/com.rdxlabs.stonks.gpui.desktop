@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Stonks Chat
+Comment=Native Stoat client
+Exec=stonks-app %u
+Icon=com.rdxlabs.stonks.gpui
+Terminal=false
+Categories=Network;InstantMessaging;
+MimeType=x-scheme-handler/stonks;
+StartupWMClass=com.rdxlabs.stonks.gpui

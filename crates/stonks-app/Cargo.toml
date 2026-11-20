@@ -1,0 +1,37 @@
+[package]
+license = "Apache-2.0"
+repository = "https://github.com/mkrotel14/stonks-chat-app"
+name = "stonks-app"
+version = "4.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gpui-kit = "=0.9.1"
+stonks-ui = { path = "../stonks-ui" }
+stonks-core = { path = "../stonks-core", features = ["media-playback", "native-voice"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+futures-channel = "0.3"
+futures-util = "0.3"
+serde_json = "1"
+url = "2"
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+serde = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+tempfile = "3"
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.12" }
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+# Match the vendored native voice stack used by stonks-core.
+[patch.crates-io]
+# Enforce the native window adapter policy at GPUI's actual selection point.
+gpui-pre-wgpu = { path = "../../vendor/gpui-pre-wgpu" }
+livekit-protocol = { path = "../../vendor/livekit-protocol" }
+webrtc-sys = { path = "../../vendor/webrtc-sys" }

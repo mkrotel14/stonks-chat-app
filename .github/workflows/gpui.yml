@@ -1,0 +1,103 @@
+name: GPUI native CI
+
+on:
+  pull_request:
+    paths: &gpui-paths
+      - '.github/workflows/gpui.yml'
+      - '.cargo/**'
+      - 'rust-toolchain.toml'
+      - 'crates/stonks-app/**'
+      - 'crates/stonks-core/**'
+      - 'crates/stonks-ui/**'
+      - 'vendor/**'
+      - 'packaging/gpui/**'
+      - 'scripts/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+  push:
+    branches: [main]
+    paths: *gpui-paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux x64 tests, AppImage and Arch package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container: archlinux:base-devel@sha256:97119fd9e21219b02b3c14ba256c9d3c0d031d07fc26c836c41ed793beeb5b74
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - name: Install dependencies from the signed Arch snapshot
+        run: |
+          printf 'Server = https://archive.archlinux.org/repos/2026/11/19/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm --needed git rustup clang cmake ninja unzip python \
+            alsa-lib dbus wayland libxkbcommon-x11 fontconfig pipewire \
+            gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav \
+            desktop-file-utils squashfs-tools xorg-server-xvfb xorg-xauth xdotool \
+            vulkan-icd-loader vulkan-swrast ttf-dejavu
+          rustup toolchain install 1.99.1 --profile minimal --component clippy --component rustfmt
+          clang++ --version
+          pkg-config --atleast-version=1.28 gstreamer-1.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Test and build native GPUI
+        run: |
+          cargo test --locked --manifest-path crates/stonks-app/Cargo.toml --all-targets
+          cargo build --locked --release --manifest-path crates/stonks-app/Cargo.toml --bin stonks-app
+      - name: Build and verify both Linux packages
+        env:
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+        run: bash packaging/gpui/linux.sh crates/stonks-app/target/release/stonks-app gpui-artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gpui-linux-x86_64
+          path: gpui-artifacts/*
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    name: Windows x64 compile, link and installer gate
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust and MSVC GStreamer SDK
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component clippy --component rustfmt --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE) { throw 'Rust installation failed' }
+          packaging/gpui/windows.ps1 -Mode Setup
+      - name: Check GPUI and link the release executable
+        shell: pwsh
+        run: |
+          cargo check --locked --target x86_64-pc-windows-msvc --manifest-path crates/stonks-app/Cargo.toml --bin stonks-app
+          if ($LASTEXITCODE) { throw 'GPUI Windows compile gate failed' }
+          cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path crates/stonks-app/Cargo.toml --bin stonks-app
+          if ($LASTEXITCODE) { throw 'GPUI Windows link gate failed' }
+      - name: Bundle verified media tools and smoke-test the installed Windows package
+        shell: pwsh
+        run: packaging/gpui/windows.ps1 -Mode Package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gpui-windows-x86_64
+          path: gpui-artifacts/*-setup.exe
+          if-no-files-found: error
+          compression-level: 0

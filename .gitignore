@@ -1,0 +1,8 @@
+**/target/
+gpui-artifacts/
+__pycache__/
+.env
+.env.*
+.DS_Store
+Thumbs.db
+*.log

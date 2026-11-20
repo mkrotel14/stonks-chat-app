@@ -1,0 +1,22 @@
+pkgname=stonks-gpui
+pkgver=0
+pkgrel=1
+pkgdesc='Stonks Chat native GPUI client for Stoat'
+arch=('x86_64')
+url='https://github.com/mkrotel14/stonks-chat-app'
+license=('Apache-2.0')
+depends=('glibc' 'gcc-libs' 'glib2' 'dbus' 'libxcb' 'libxkbcommon-x11' 'wayland'
+         'fontconfig' 'vulkan-icd-loader' 'vulkan-driver' 'pipewire' 'alsa-lib'
+         'gstreamer>=1.28' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-libav')
+optdepends=('ffmpeg: shared music playback' 'yt-dlp: YouTube music playback' 'deno: YouTube extraction runtime')
+options=('!strip' '!debug')
+source=('stonks-app' 'com.rdxlabs.stonks.gpui.desktop' 'com.rdxlabs.stonks.gpui.png' 'THIRD_PARTY_NOTICES.md' 'LICENSE')
+# linux.sh generates checksums from the exact CI build inputs before makepkg runs.
+
+package() {
+  install -Dm755 "$srcdir/stonks-app" "$pkgdir/usr/bin/stonks-app"
+  install -Dm644 "$srcdir/com.rdxlabs.stonks.gpui.desktop" "$pkgdir/usr/share/applications/com.rdxlabs.stonks.gpui.desktop"
+  install -Dm644 "$srcdir/com.rdxlabs.stonks.gpui.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/com.rdxlabs.stonks.gpui.png"
+  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$srcdir/THIRD_PARTY_NOTICES.md" "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.md"
+}

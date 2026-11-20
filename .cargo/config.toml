@@ -1,0 +1,7 @@
+# The prebuilt LiveKit WebRTC static library is compiled with the static MSVC
+# CRT (/MT). Match it or linking fails with LNK2038/LNK2005 CRT mismatches.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
