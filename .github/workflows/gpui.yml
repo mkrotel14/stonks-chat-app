@@ -69,6 +69,35 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  fedora:
+    name: Fedora 44 x64 native RPM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FEDORA_IMAGE: fedora:44@sha256:b189269dfee735c54ebcd3b4e43ff2dc0d4a4b07855468970217c9df57968eb0
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build and test with the Fedora 44 release SDK
+        run: |
+          mkdir -p fedora-artifacts
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/fedora-artifacts:/out" \
+            "$FEDORA_IMAGE" bash /src/packaging/gpui/fedora.sh build /out
+      - name: Install and smoke-test in a fresh Fedora container
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/fedora-artifacts:/out:ro" \
+            "$FEDORA_IMAGE" bash /src/packaging/gpui/fedora.sh smoke /out
+          (cd fedora-artifacts && sha256sum -- *.rpm > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gpui-fedora-44-x86_64
+          path: |
+            fedora-artifacts/*.rpm
+            fedora-artifacts/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+
   windows:
     name: Windows x64 compile, link and installer gate
     runs-on: windows-2025

@@ -19,6 +19,14 @@ Both packages carry the same release binary, desktop entry, icon and notices. Th
 - `Stonks.GPUI_<version>_x86_64.AppImage`: a thin AppImage for hosts compatible with that same Arch baseline. It uses system libraries, Vulkan and GStreamer plugins; it is **not** a standalone cross-distribution bundle. Use the Arch recipe as the host dependency list. Use `--appimage-extract-and-run` when FUSE is unavailable.
 - `SHA256SUMS`: checksums of both artifacts.
 
+## Fedora 44 x86_64 native RPM
+
+`gpui-fedora-44-x86_64` contains `stonks-gpui-<version>-1.fc44.x86_64.rpm` and `SHA256SUMS`. On Fedora 44, install with `sudo dnf install ./stonks-gpui-<version>-1.fc44.x86_64.rpm`. Fedora 44's signed release repository has GStreamer 1.28.1; Fedora 43's updates are still on 1.26 and do not meet the build floor. No third-party repositories are needed for the RPM's hard dependencies.
+
+CI uses a digest-pinned Fedora 44 base and enables only the signed `fedora` release repository for build and runtime validation. It uses the pinned Rust toolchain, Cargo `--locked`, and checks the three GStreamer SDK modules. The RPM automatically declares linked ELF libraries and explicitly requires runtime plugins and tools that linking cannot detect. It uses Fedora's available plugins; this does not imply coverage of all codecs. External music/extraction tools are optional and not bundled. The pins are not a guarantee of byte-for-byte reproducibility.
+
+A fresh container installs through DNF with weak dependencies disabled, verifies RPM metadata/payload and ELF linkage, checks required GStreamer elements and executable tools, then uses D-Bus, Xvfb and Mesa software Vulkan to require a visible window from `/usr/bin/stonks-app`. It also checks that uninstall removes the binary. This is an X11 startup smoke test, not coverage of Wayland, hardware GPUs, actual media playback, voice, screen sharing, or authenticated use. It does not validate the Arch-built AppImage on Fedora or imply support for other distributions.
+
 ## Windows x86_64 (unverified until native CI passes)
 
 The Windows runner installs the hash-verified MSVC GStreamer 1.28 SDK and pkgconf, then checks and links the actual `stonks-app.exe`. Only then does it run the Inno Setup recipe (ISCC comes from the `windows-2025` runner image; the script logs its version). The smoke gate silently installs into a temporary directory, compares the installed app, notices and four media executables against the build inputs, runs each installed tool by absolute path with its version flag, requires a visible `Stonks Chat` window from the installed app, and checks that uninstall removes the app and tools. Any failure blocks upload. The gate does not test actual playback, YouTube resolution, authenticated use or voice, and it runs on an SDK-equipped runner rather than a clean Windows machine.
