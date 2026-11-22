@@ -442,6 +442,7 @@ mod tests {
             muted: true,
             deafened: false,
             error: None,
+            remote_participants: Default::default(),
             active_speakers: Default::default(),
         };
         assert_eq!(check_state(&state), Ok(()));

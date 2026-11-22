@@ -82,6 +82,8 @@ pub struct VoiceSnapshot {
     pub muted: bool,
     pub deafened: bool,
     pub error: Option<VoiceError>,
+    /// Last known LiveKit remote membership, retained during reconnect.
+    pub remote_participants: BTreeSet<String>,
     /// LiveKit identities in the latest active-speaker snapshot for this room.
     pub active_speakers: BTreeSet<String>,
 }
@@ -94,6 +96,9 @@ impl VoiceSnapshot {
     fn set_phase(&mut self, phase: VoicePhase) {
         self.phase = phase;
         self.active_speakers.clear();
+        if phase == VoicePhase::Disconnected {
+            self.remote_participants.clear();
+        }
     }
 
     pub fn effectively_muted(&self) -> bool {
@@ -207,6 +212,7 @@ impl VoiceSession {
             muted: !request.can_speak,
             deafened: false,
             error: None,
+            remote_participants: Default::default(),
             active_speakers: Default::default(),
         });
         let (ready_tx, ready) = oneshot::channel();
@@ -527,7 +533,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn room_transitions_discard_active_speakers() {
+    fn room_transitions_preserve_membership_only_until_disconnect() {
         let mut state = VoiceSnapshot {
             channel_id: "channel".into(),
             phase: VoicePhase::Connected,
@@ -535,15 +541,18 @@ mod tests {
             muted: false,
             deafened: false,
             error: None,
+            remote_participants: ["remote".into()].into(),
             active_speakers: ["me".into(), "remote".into()].into(),
         };
         assert!(state.is_speaking("me") && state.is_speaking("remote"));
         state.set_phase(VoicePhase::Reconnecting);
+        assert!(state.remote_participants.contains("remote"));
         assert!(state.active_speakers.is_empty());
         state.set_phase(VoicePhase::Connected);
         assert!(!state.is_speaking("me") && !state.is_speaking("remote"));
         state.active_speakers.insert("remote".into());
         state.set_phase(VoicePhase::Disconnected);
+        assert!(state.remote_participants.is_empty());
         assert!(state.active_speakers.is_empty());
     }
 
@@ -556,6 +565,7 @@ mod tests {
             muted: false,
             deafened: false,
             error: None,
+            remote_participants: Default::default(),
             active_speakers: Default::default(),
         };
         apply_control(&mut state, Control::Deafen(true)).unwrap();

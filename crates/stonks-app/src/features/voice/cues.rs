@@ -362,6 +362,7 @@ mod tests {
             muted: false,
             deafened: false,
             error: None,
+            remote_participants: Default::default(),
             active_speakers: Default::default(),
         };
         let muted = VoiceSnapshot {

@@ -35,6 +35,27 @@ pub(super) struct SoundboardStartup {
     )>,
 }
 
+fn remote_participant_ids(room: &Room) -> std::collections::BTreeSet<String> {
+    room.remote_participants()
+        .into_keys()
+        .map(|id| id.to_string())
+        .collect()
+}
+
+fn refresh_remote_participants(room: &Room, state: &mut VoiceSnapshot) -> bool {
+    if state.phase != VoicePhase::Connected {
+        return false;
+    }
+    // Events can be queued while the room map advances. Read the map rather
+    // than replaying deltas into a snapshot that may already include them.
+    let current = remote_participant_ids(room);
+    if current == state.remote_participants {
+        return false;
+    }
+    state.remote_participants = current;
+    true
+}
+
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) async fn run(
@@ -101,6 +122,7 @@ pub(super) async fn run(
     state.muted = !state.can_speak;
     update_microphone(&state, microphone.as_ref(), capture.as_ref());
     let local_id = room.local_participant().identity().to_string();
+    state.remote_participants = remote_participant_ids(&room);
     let mut presence = Presence::default();
     let mut playback = Playback {
         gains: listening_gains.clone(),
@@ -237,6 +259,7 @@ pub(super) async fn run(
                         Some(RoomEvent::Reconnected) => {
                             presence.set_live(true);
                             state.set_phase(VoicePhase::Connected);
+                            state.remote_participants = remote_participant_ids(&room);
                             screen.viewing.reconcile(&room, true).await;
                             camera.viewing.reconcile(&room, true).await;
                             if !grant_allows_microphone(room.local_participant().permission().as_ref()) {
@@ -258,6 +281,9 @@ pub(super) async fn run(
                             }
                         }
                         Some(RoomEvent::ParticipantConnected(participant)) => {
+                            if refresh_remote_participants(&room, &mut state) {
+                                state_tx.send_replace(state.clone());
+                            }
                             if let Some(event) = presence.update(participant.identity().to_string(), &local_id, true) {
                                 let _ = presence_tx.try_send(event);
                             }
@@ -268,7 +294,8 @@ pub(super) async fn run(
                             }
                             screen.viewing.reconcile(&room, state.phase == VoicePhase::Connected).await;
                             camera.viewing.reconcile(&room, state.phase == VoicePhase::Connected).await;
-                            if state.active_speakers.remove(&participant.identity().to_string()) {
+                            let membership_changed = refresh_remote_participants(&room, &mut state);
+                            if state.active_speakers.remove(&participant.identity().to_string()) || membership_changed {
                                 state_tx.send_replace(state.clone());
                             }
                             playback.reconcile(&room, &state, &request, screen.viewing.target.as_deref());
@@ -626,6 +653,7 @@ mod tests {
             muted: false,
             deafened: false,
             error: None,
+            remote_participants: Default::default(),
             active_speakers: ["local".into(), "peer".into()].into(),
         };
         microphone_failed(&mut state, &mut None, &mut None, "local");

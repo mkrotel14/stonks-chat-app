@@ -56,11 +56,29 @@ pub fn participants(
         .flat_map(|state| &state.participants)
         .collect::<Vec<_>>();
     let me = snapshot.current_user.id.as_str();
-    let local_only = local.is_some() && !entries.iter().any(|entry| entry.id == me);
-    entries
-        .into_iter()
+    let mut roster: Vec<_> = entries
+        .iter()
+        .copied()
+        .filter(|entry| {
+            local
+                .is_none_or(|state| entry.id == me || state.remote_participants.contains(&entry.id))
+        })
         .map(|entry| (entry.id.as_str(), Some(entry)))
-        .chain(local_only.then_some((me, None)))
+        .collect();
+    if let Some(state) = local {
+        // Gateway entries supply badges and ordering, not membership in our room.
+        roster.extend(
+            state
+                .remote_participants
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(me))
+                .filter(|id| !entries.iter().any(|entry| entry.id == *id))
+                .map(|id| (id, None)),
+        );
+    }
+    roster
+        .into_iter()
         .map(|(id, entry)| {
             let speaking = local.is_some_and(|state| state.is_speaking(id));
             let local = if id == me { local } else { None };
@@ -654,6 +672,7 @@ mod tests {
             muted: false,
             deafened: true,
             error: None,
+            remote_participants: ["unknown".into(), "remote".into()].into(),
             active_speakers: Default::default(),
         };
         assert!(is_connected_roster(Some(&state), "room"));
@@ -674,13 +693,30 @@ mod tests {
         assert!(!joined[0].speaking);
         assert!(joined[1].speaking && joined[2].speaking);
 
+        // LiveKit goes self-only while the gateway still lists both peers.
+        state.remote_participants.clear();
+        let ids = |local: Option<&VoiceSnapshot>| {
+            participants(&channel, &snapshot, None, local)
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(Some(&state)), ["me"]);
         state.phase = VoicePhase::Reconnecting;
         assert!(!is_connected_roster(Some(&state), "room"));
         assert!(participants(&channel, &snapshot, None, Some(&state))
             .iter()
             .all(|entry| !entry.speaking));
+        assert_eq!(ids(Some(&state)), ["me"]);
+        state.phase = VoicePhase::Connected;
+        state.remote_participants.insert("livekit-only".into());
+        assert_eq!(ids(Some(&state)), ["me", "livekit-only"]);
+        state.phase = VoicePhase::Disconnected;
+        assert_eq!(ids(Some(&state)), ["unknown", "remote", "me"]);
+        assert_eq!(ids(None), ["unknown", "remote", "me"]);
         state.phase = VoicePhase::Connected;
         state.channel_id = "another-room".into();
+        assert_eq!(ids(Some(&state)), ["unknown", "remote", "me"]);
         assert!(participants(&channel, &snapshot, None, Some(&state))
             .iter()
             .all(|entry| !entry.speaking));
