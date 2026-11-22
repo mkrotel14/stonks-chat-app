@@ -289,7 +289,7 @@ fn show_menu(hwnd: HWND) {
 }
 
 pub(super) fn set_visible(window: &gpui_kit::Window, visible: bool) -> bool {
-    let Ok(handle) = window.window_handle() else {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return false;
     };
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {

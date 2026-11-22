@@ -18,6 +18,9 @@ case ${1:?Pass build or smoke} in
       gstreamer1-devel gstreamer1-plugins-base-devel
     cd "$repo"
     toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+    # Fedora's RPM ships rustup-init; bootstrap the proxies for this non-login shell.
+    /usr/bin/rustup-init -y --no-modify-path --default-toolchain none
+    export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
     rustup toolchain install "$toolchain" --profile minimal --component clippy --component rustfmt
     clang++ --version
     for module in gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0; do

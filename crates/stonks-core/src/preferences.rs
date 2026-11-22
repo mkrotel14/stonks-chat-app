@@ -201,7 +201,7 @@ impl VideoQuality {
 }
 
 impl Preferences {
-    #[cfg(all(feature = "native-voice", target_os = "linux"))]
+    #[cfg(all(feature = "native-voice", any(target_os = "linux", windows)))]
     pub fn voice_audio(&self) -> crate::voice::VoiceAudioOptions {
         crate::voice::VoiceAudioOptions {
             input_device: self.input_device.clone(),

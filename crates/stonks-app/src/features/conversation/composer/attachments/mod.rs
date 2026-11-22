@@ -10,9 +10,10 @@ use gpui_kit::{
     InteractiveElement, IntoElement, ObjectFit, ParentElement, PathPromptOptions, RenderImage,
     StatefulInteractiveElement, Styled, StyledImage, Window,
 };
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     io::{Cursor, Read},
-    os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -113,11 +114,12 @@ fn read_file(path: PathBuf, limit: u64) -> Result<PickedAttachment, String> {
         .filter(|name| !name.is_empty() && name.len() <= 255 && !name.chars().any(char::is_control))
         .ok_or_else(failed)?
         .to_owned();
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(&path)
-        .map_err(|_| failed())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // Opening a Unix FIFO must not block before the regular-file check.
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let file = options.open(&path).map_err(|_| failed())?;
     let metadata = file.metadata().map_err(|_| failed())?;
     if !metadata.is_file() || metadata.len() == 0 {
         return Err(failed());

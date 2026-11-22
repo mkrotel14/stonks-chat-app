@@ -43,11 +43,21 @@ jobs:
       - name: Install dependencies from the signed Arch snapshot
         run: |
           printf 'Server = https://archive.archlinux.org/repos/2026/11/19/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
-          pacman -Syyu --noconfirm --needed git rustup clang cmake ninja unzip python \
-            alsa-lib dbus wayland libxkbcommon-x11 fontconfig pipewire \
-            gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav \
-            desktop-file-utils squashfs-tools xorg-server-xvfb xorg-xauth xdotool \
-            vulkan-icd-loader vulkan-swrast ttf-dejavu
+          # Retry the snapshot transaction if an archive download stalls.
+          for attempt in 1 2 3; do
+            if pacman -Syyu --noconfirm --needed git rustup clang cmake ninja unzip python \
+              alsa-lib dbus wayland libxkbcommon-x11 fontconfig pipewire \
+              gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav \
+              desktop-file-utils squashfs-tools xorg-server-xvfb xorg-xauth xdotool \
+              vulkan-icd-loader vulkan-swrast ttf-dejavu; then
+              break
+            else
+              status=$?
+            fi
+            if (( attempt == 3 )); then exit "$status"; fi
+            echo "Arch snapshot install failed (attempt $attempt/3); retrying in 10s" >&2
+            sleep 10
+          done
           rustup toolchain install 1.99.1 --profile minimal --component clippy --component rustfmt
           clang++ --version
           pkg-config --atleast-version=1.28 gstreamer-1.0
