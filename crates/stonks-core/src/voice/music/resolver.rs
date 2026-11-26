@@ -51,16 +51,29 @@ pub(super) fn is_collection_url(value: &str) -> bool {
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return false;
     }
-    url.query_pairs()
-        .any(|(key, value)| key == "list" && !value.is_empty())
-        || url.path_segments().is_some_and(|mut segments| {
-            segments.any(|segment| {
-                matches!(
-                    segment.to_ascii_lowercase().as_str(),
-                    "playlist" | "playlists" | "album" | "albums" | "set" | "sets"
-                )
-            })
+    let has_video = if url.host_str() == Some("youtu.be") {
+        url.path_segments()
+            .and_then(|mut segments| segments.next())
+            .is_some_and(|id| !id.is_empty())
+    } else {
+        url.path() == "/watch"
+            && url
+                .query_pairs()
+                .any(|(key, value)| key == "v" && !value.is_empty())
+    };
+    // YouTube radio mixes can return no entries in flat-playlist mode.
+    // Play the seed video instead of importing the generated mix.
+    let radio_track = has_video && is_youtube_url(value);
+    url.query_pairs().any(|(key, value)| {
+        key == "list" && !value.is_empty() && !(radio_track && value.starts_with("RD"))
+    }) || url.path_segments().is_some_and(|mut segments| {
+        segments.any(|segment| {
+            matches!(
+                segment.to_ascii_lowercase().as_str(),
+                "playlist" | "playlists" | "album" | "albums" | "set" | "sets"
+            )
         })
+    })
 }
 
 fn is_youtube_url(value: &str) -> bool {
@@ -459,6 +472,28 @@ mod tests {
             directories.first(),
             Some(&PathBuf::from("/usr/lib/Stonks/resources/media"))
         );
+    }
+
+    #[test]
+    fn plays_youtube_radio_seed_without_importing_the_mix() {
+        assert!(!is_collection_url(
+            "https://music.youtube.com/watch?v=jNQXAC9IVRw&list=RDAMVMjNQXAC9IVRw"
+        ));
+        assert!(!is_collection_url(
+            "https://youtu.be/jNQXAC9IVRw?list=RDjNQXAC9IVRw"
+        ));
+        assert!(is_collection_url(
+            "https://www.youtube.com/playlist?list=RDjNQXAC9IVRw"
+        ));
+        assert!(is_collection_url(
+            "https://music.youtube.com/playlist?list=OLAK5uy_example"
+        ));
+        assert!(is_collection_url(
+            "https://www.youtube.com/watch?v=a&list=PLexample"
+        ));
+        assert!(is_collection_url(
+            "https://example.com/watch?v=a&list=RDexample"
+        ));
     }
 
     #[test]

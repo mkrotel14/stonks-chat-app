@@ -2,7 +2,7 @@
 license = "Apache-2.0"
 repository = "https://github.com/mkrotel14/stonks-chat-app"
 name = "stonks-app"
-version = "4.0.1"
+version = "4.0.2"
 edition = "2021"
 publish = false
 
@@ -22,6 +22,8 @@ tempfile = "3"
 libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+sha2 = "0.10"
 gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.12" }
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 

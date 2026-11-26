@@ -8,13 +8,21 @@ license=('Apache-2.0')
 depends=('glibc' 'gcc-libs' 'glib2' 'dbus' 'libxcb' 'libxkbcommon-x11' 'wayland'
          'fontconfig' 'vulkan-icd-loader' 'vulkan-driver' 'pipewire' 'alsa-lib'
          'gstreamer>=1.28' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-libav')
-optdepends=('ffmpeg: shared music playback' 'yt-dlp: YouTube music playback' 'deno: YouTube extraction runtime')
+optdepends=('polkit: in-app Arch updates (also requires a desktop authentication agent)' 'ffmpeg: shared music playback' 'yt-dlp: YouTube music playback' 'deno: YouTube extraction runtime')
+if [[ $pkgname == stonks ]]; then
+  conflicts=('stonks-gpui')
+else
+  conflicts=('stonks')
+fi
 options=('!strip' '!debug')
 source=('stonks-app' 'com.rdxlabs.stonks.gpui.desktop' 'com.rdxlabs.stonks.gpui.png' 'THIRD_PARTY_NOTICES.md' 'LICENSE')
 # linux.sh generates checksums from the exact CI build inputs before makepkg runs.
 
 package() {
   install -Dm755 "$srcdir/stonks-app" "$pkgdir/usr/bin/stonks-app"
+  if [[ $pkgname == stonks ]]; then
+    ln -s stonks-app "$pkgdir/usr/bin/stonks"
+  fi
   install -Dm644 "$srcdir/com.rdxlabs.stonks.gpui.desktop" "$pkgdir/usr/share/applications/com.rdxlabs.stonks.gpui.desktop"
   install -Dm644 "$srcdir/com.rdxlabs.stonks.gpui.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/com.rdxlabs.stonks.gpui.png"
   install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

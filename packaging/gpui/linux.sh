@@ -43,6 +43,21 @@ fi
   cat checksums >> PKGBUILD
   "${builder[@]}" makepkg --noconfirm --clean
 )
+# Build a same-identity update for existing bridge installs, not a replacement.
+bridge=$work/bridge
+cp -a "$arch" "$bridge"
+sed -i 's/^pkgname=stonks-gpui$/pkgname=stonks/' "$bridge/PKGBUILD"
+(
+  cd "$bridge"
+  "${builder[@]}" makepkg --noconfirm --clean
+)
+bridge_package=$bridge/stonks-$version-1-x86_64.pkg.tar.zst
+test "$(pacman -Qp "$bridge_package")" = "stonks $version-1"
+mkdir "$work/bridge-tree"
+bsdtar -xf "$bridge_package" -C "$work/bridge-tree"
+cmp "$binary" "$work/bridge-tree/usr/bin/stonks-app"
+test "$(readlink "$work/bridge-tree/usr/bin/stonks")" = stonks-app
+
 package=$arch/stonks-gpui-$version-1-x86_64.pkg.tar.zst
 test "$(pacman -Qp "$package")" = "stonks-gpui $version-1"
 mkdir "$work/arch-tree"
@@ -87,10 +102,10 @@ cmp "$arch/THIRD_PARTY_NOTICES.md" "$work/squashfs-root/usr/share/doc/stonks-gpu
 
 # A visible window, not merely a surviving process. Use host Mesa software
 # Vulkan and isolated desktop state; no account or secrets are required.
-for launcher in "$arch_tree/usr/bin/stonks-app" "$image"; do
+for launcher in "$arch_tree/usr/bin/stonks-app" "$work/bridge-tree/usr/bin/stonks" "$image"; do
   dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' \
     bash "$repo/packaging/gpui/smoke-linux.sh" "$launcher"
 done
 install -m755 "$image" "$output/"
-install -m644 "$package" "$output/"
-(cd "$output"; sha256sum "$(basename "$image")" "$(basename "$package")" > SHA256SUMS)
+install -m644 "$package" "$bridge_package" "$output/"
+(cd "$output"; sha256sum "$(basename "$image")" "$(basename "$package")" "$(basename "$bridge_package")" > SHA256SUMS)

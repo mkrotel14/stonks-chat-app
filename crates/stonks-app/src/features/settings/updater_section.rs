@@ -16,36 +16,57 @@ pub(crate) fn render(cx: &App) -> Div {
 impl Render for Updater {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
-        let busy = matches!(self.status, Status::Checking);
-        let details = match &self.status {
-            Status::PublicRelease(version) => Some(t_vars(
-                "settings.desktop.gpuiPublicRelease",
-                &[("version", version)],
-            )),
-            Status::Failed(error) => Some(t(match error {
+        let status = &self.status;
+        let description = match status {
+            Status::PublicRelease(version) => format!(
+                "{} {}",
+                t_vars(
+                    "settings.desktop.gpuiPublicRelease",
+                    &[("version", version)],
+                ),
+                t("settings.desktop.gpuiUpdateUnsupported")
+            ),
+            Status::Failed(error) => t(match error {
                 DiscoveryError::Unavailable => "settings.desktop.gpuiReleaseUnavailable",
                 DiscoveryError::InvalidMetadata => "settings.desktop.gpuiReleaseInvalid",
-            })),
-            Status::Idle | Status::Checking => None,
+            }),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            Status::Available(candidate) => t_vars(
+                "settings.desktop.archAvailable",
+                &[("package", &candidate.label())],
+            ),
+            Status::Idle => String::new(),
+            Status::Checking => t("settings.desktop.checking"),
+            Status::Current => t("settings.desktop.archCurrent"),
+            Status::Confirming => t("settings.desktop.archConfirm"),
+            Status::Downloading => t("settings.desktop.archDownloading"),
+            Status::Installing => t("settings.desktop.archInstalling"),
+            Status::Installed => t("settings.desktop.archInstalled"),
+            Status::ArchFailed(error) => t_vars("settings.desktop.archFailed", &[("error", error)]),
         };
-        let channel = t("settings.desktop.gpuiUpdateUnsupported");
-        let description = match details {
-            Some(details) => format!("{details} {channel}"),
-            None => channel,
+        let button = Button::new("desktop-check-update", theme.clone())
+            .variant(ButtonVariant::Secondary)
+            .label(t(if matches!(status, Status::Checking) {
+                "settings.desktop.checking"
+            } else {
+                "settings.desktop.checkNow"
+            }))
+            .disabled(status.busy() || matches!(status, Status::Installed))
+            .on_click(cx.listener(|this, _, _, cx| this.check(cx)));
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let button = if matches!(status, Status::Available(_)) {
+            Button::new("desktop-install-update", theme.clone())
+                .variant(ButtonVariant::Secondary)
+                .label(t("settings.desktop.archInstall"))
+                .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx)))
+        } else {
+            button
         };
         settings_section(&theme, &t("settings.desktop.updates")).child(settings_row(
             &theme,
             &format!("Stonks Chat {CURRENT_VERSION}"),
             &description,
-            Button::new("desktop-check-update", theme)
-                .variant(ButtonVariant::Secondary)
-                .label(t(if busy {
-                    "settings.desktop.checking"
-                } else {
-                    "settings.desktop.checkNow"
-                }))
-                .disabled(busy)
-                .on_click(cx.listener(|this, _, _, cx| this.check(cx))),
+            button,
         ))
     }
 }

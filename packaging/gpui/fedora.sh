@@ -54,6 +54,7 @@ case ${1:?Pass build or smoke} in
     package=${packages[0]}
     # Resolve package dependencies before installing the test harness.
     "${dnf[@]}" install "$package"
+    "${dnf[@]}" install diffutils
     rpm -V stonks-gpui
     printf '%s  /usr/bin/stonks-app\n' "$(cat "$output/binary.sha256")" | sha256sum --check --strict
     cmp "$repo/crates/stonks-app/launcher/$id.desktop" "/usr/share/applications/$id.desktop"

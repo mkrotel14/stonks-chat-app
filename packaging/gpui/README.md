@@ -13,11 +13,18 @@ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
   bash packaging/gpui/linux.sh crates/stonks-app/target/release/stonks-app /tmp/gpui-artifacts
 ```
 
-Both packages carry the same release binary, desktop entry, icon and notices. The script validates ELF architecture and linkage, checks pacman metadata, extracts both packages and compares payloads, and requires a visible window from each packaged launcher under Xvfb. The AppImage runs in extract-and-run mode for CI; FUSE mounting is not tested. The archived AppImage runtime is fetched by asset ID and checked by SHA-256, so if upstream removes the asset the build fails closed.
+All three artifacts carry the same release binary, desktop entry, icon and notices. The script validates ELF architecture and linkage, checks pacman metadata, extracts packaged files and compares payloads, and requires a visible window from each packaged launcher under Xvfb. The AppImage runs in extract-and-run mode for CI; FUSE mounting is not tested. The archived AppImage runtime is fetched by asset ID and checked by SHA-256, so if upstream removes the asset the build fails closed.
 
 - `stonks-gpui-<version>-1-x86_64.pkg.tar.zst`: install with `pacman -U`; runtime packages are declared in the recipe.
 - `Stonks.GPUI_<version>_x86_64.AppImage`: a thin AppImage for hosts compatible with that same Arch baseline. It uses system libraries, Vulkan and GStreamer plugins; it is **not** a standalone cross-distribution bundle. Use the Arch recipe as the host dependency list. Use `--appimage-extract-and-run` when FUSE is unavailable.
-- `SHA256SUMS`: checksums of both artifacts.
+- `stonks-<version>-1-x86_64.pkg.tar.zst`: continuation of the GPUI bridge package. Preserves the `stonks` package identity and `/usr/bin/stonks` launcher. Do not install it alongside `stonks-gpui`.
+- `SHA256SUMS`: checksums of all three artifacts.
+
+### In-app Arch updates
+
+Desktop Settings → Updates checks the latest stable release in `mkrotel14/stonks-chat-app`. For updates to reach both package identities, attach both unmodified Arch artifacts to that GitHub release, with a tag of `v<version>` (or `<version>`) matching the packaged version. CI artifacts alone are not an update channel. The updater requires the matching asset's GitHub-provided SHA-256 digest and byte size; it does not use `SHA256SUMS` or bypass local pacman signature policy. This trusts GitHub and the pinned repository's release publishers, not an independent package signature.
+
+Only x86-64 Arch installs whose running binary is `/usr/bin/stonks-app` and is owned by one of the supported packages can install in-app. The user must confirm the exact package/version before downloading and then authorize `pkexec` via a desktop polkit agent. Pacman updates the same package identity with no forced overwrite. Restart the application after it reports success. AppImage, Fedora and Windows builds remain discovery-only.
 
 ## Fedora 44 x86_64 native RPM
 
