@@ -1,15 +1,26 @@
-//! Application-wide GPUI release discovery and confirmed Arch updates.
+//! Application-wide GPUI release discovery and confirmed managed updates.
 
 use gpui_kit::*;
 use stonks_core::release_discovery::{latest_public_version, DiscoveryError};
 
 use crate::runtime::spawn_core;
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[path = "app_updater/arch.rs"]
-mod arch;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(crate) use arch::Candidate;
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_os = "linux", target_os = "windows")
+))]
+#[path = "app_updater/managed.rs"]
+mod managed;
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_os = "linux", target_os = "windows")
+))]
+pub(crate) use managed::Candidate;
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_os = "linux", target_os = "windows")
+))]
+use managed::{InstalledAction, Kind};
 
 pub(crate) const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -26,14 +37,17 @@ pub(crate) enum Status {
     Checking,
     PublicRelease(String),
     Failed(DiscoveryError),
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    ))]
     Available(Candidate),
     Current,
     Confirming,
     Downloading,
     Installing,
     Installed,
-    ArchFailed(String),
+    InstallFailed(String),
 }
 
 impl Status {
@@ -74,12 +88,19 @@ impl Updater {
         self.status = Status::Checking;
         self.task = Some(cx.spawn(async move |this, cx| {
             let status = spawn_core(async {
-                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-                if arch::eligible() {
-                    return match arch::check().await {
+                #[cfg(all(
+                    target_arch = "x86_64",
+                    any(target_os = "linux", target_os = "windows")
+                ))]
+                if let Some(kind) = tokio::task::spawn_blocking(managed::managed_kind)
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    return match managed::check(kind).await {
                         Ok(Some(candidate)) => Status::Available(candidate),
                         Ok(None) => Status::Current,
-                        Err(error) => Status::ArchFailed(error),
+                        Err(error) => Status::InstallFailed(error),
                     };
                 }
                 match latest_public_version().await {
@@ -97,7 +118,10 @@ impl Updater {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_os = "linux", target_os = "windows")
+))]
 impl Updater {
     pub(crate) fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use stonks_ui::i18n::t;
@@ -115,7 +139,11 @@ impl Updater {
             Some(&format!(
                 "{}\n{}",
                 candidate.label(),
-                t("settings.desktop.archConfirmDetail")
+                t(match candidate.kind() {
+                    Kind::Arch => "settings.desktop.archConfirmDetail",
+                    Kind::Rpm => "settings.desktop.rpmConfirmDetail",
+                    Kind::Windows => "settings.desktop.windowsConfirmDetail",
+                })
             )),
             &[
                 PromptButton::cancel(t("common.cancel")),
@@ -142,7 +170,7 @@ impl Updater {
                 return;
             }
             let (sender, receiver) = futures_channel::oneshot::channel();
-            let installer = spawn_core(arch::install(candidate, move || {
+            let installer = spawn_core(managed::install(candidate, move || {
                 let _ = sender.send(());
             }));
             if receiver.await.is_ok() {
@@ -151,13 +179,23 @@ impl Updater {
                     cx.notify();
                 });
             }
-            let status = match installer.await {
-                Ok(()) => Status::Installed,
-                Err(error) => Status::ArchFailed(error),
-            };
+            let result = installer.await;
             let _ = this.update(cx, |updater, cx| {
-                updater.status = status;
+                updater.status = match &result {
+                    Ok(_) => Status::Installed,
+                    Err(error) => Status::InstallFailed(error.clone()),
+                };
                 cx.notify();
+                match result {
+                    #[cfg(target_os = "linux")]
+                    Ok(InstalledAction::Restart) => {
+                        cx.set_restart_path("/usr/bin/stonks-app".into());
+                        cx.restart();
+                    }
+                    #[cfg(target_os = "windows")]
+                    Ok(InstalledAction::Quit) => cx.quit(),
+                    _ => {}
+                }
             });
         }));
         cx.notify();

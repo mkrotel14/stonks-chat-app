@@ -30,7 +30,10 @@ impl Render for Updater {
                 DiscoveryError::Unavailable => "settings.desktop.gpuiReleaseUnavailable",
                 DiscoveryError::InvalidMetadata => "settings.desktop.gpuiReleaseInvalid",
             }),
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                target_arch = "x86_64",
+                any(target_os = "linux", target_os = "windows")
+            ))]
             Status::Available(candidate) => t_vars(
                 "settings.desktop.archAvailable",
                 &[("package", &candidate.label())],
@@ -42,7 +45,9 @@ impl Render for Updater {
             Status::Downloading => t("settings.desktop.archDownloading"),
             Status::Installing => t("settings.desktop.archInstalling"),
             Status::Installed => t("settings.desktop.archInstalled"),
-            Status::ArchFailed(error) => t_vars("settings.desktop.archFailed", &[("error", error)]),
+            Status::InstallFailed(error) => {
+                t_vars("settings.desktop.archFailed", &[("error", error)])
+            }
         };
         let button = Button::new("desktop-check-update", theme.clone())
             .variant(ButtonVariant::Secondary)
@@ -53,7 +58,10 @@ impl Render for Updater {
             }))
             .disabled(status.busy() || matches!(status, Status::Installed))
             .on_click(cx.listener(|this, _, _, cx| this.check(cx)));
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            target_arch = "x86_64",
+            any(target_os = "linux", target_os = "windows")
+        ))]
         let button = if matches!(status, Status::Available(_)) {
             Button::new("desktop-install-update", theme.clone())
                 .variant(ButtonVariant::Secondary)

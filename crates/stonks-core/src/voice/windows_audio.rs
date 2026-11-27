@@ -211,12 +211,20 @@ fn open_input(id: &str) -> Result<(cpal::Stream, mpsc::Receiver<Pcm>), VoiceErro
                     _ => {}
                 }
             },
-            move |_| on_error.store(true, Ordering::Relaxed),
+            move |error| record_input_error(&on_error, error.kind()),
             None,
         )
         .map_err(|_| VoiceError::Capture)?;
     stream.play().map_err(|_| VoiceError::Capture)?;
     Ok((stream, rx))
+}
+
+fn record_input_error(failed: &AtomicBool, kind: cpal::ErrorKind) {
+    // WASAPI reports packet discontinuities as XRuns and keeps delivering audio.
+    // Discarding all subsequent callbacks would turn a dropout into listen-only mode.
+    if kind != cpal::ErrorKind::Xrun {
+        failed.store(true, Ordering::Relaxed);
+    }
 }
 
 struct Output {
@@ -398,6 +406,16 @@ pub(super) async fn preview(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_xrun_does_not_latch_capture_failure() {
+        let failed = AtomicBool::new(false);
+        record_input_error(&failed, cpal::ErrorKind::Xrun);
+        assert!(!failed.load(Ordering::Relaxed));
+        record_input_error(&failed, cpal::ErrorKind::DeviceNotAvailable);
+        record_input_error(&failed, cpal::ErrorKind::Xrun);
+        assert!(failed.load(Ordering::Relaxed));
+    }
 
     #[test]
     fn playback_buffers_and_drains_without_blocking() {

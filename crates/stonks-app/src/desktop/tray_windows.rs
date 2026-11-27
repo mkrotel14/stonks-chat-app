@@ -15,6 +15,7 @@ use windows_sys::Win32::{
 };
 
 const CALLBACK: u32 = WM_APP + 1;
+const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 const CLASS: *const u16 = windows_sys::core::w!("com.rdxlabs.stonks.gpui.tray");
 static BALLOONS: Mutex<Option<mpsc::Sender<Balloon>>> = Mutex::new(None);
 
@@ -52,6 +53,7 @@ thread_local! {
 pub(super) struct Tray {
     data: NOTIFYICONDATAW,
     available: bool,
+    retry_at: Option<Instant>,
     next_id: u32,
     requests: mpsc::Receiver<Balloon>,
     active: Option<(Instant, Balloon)>,
@@ -71,12 +73,11 @@ impl Tray {
             if RegisterClassW(&class) == 0 {
                 return Err(io::Error::last_os_error());
             }
-            TASKBAR_CREATED.set(RegisterWindowMessageW(windows_sys::core::w!(
-                "TaskbarCreated"
-            )));
+            let taskbar_created = RegisterWindowMessageW(windows_sys::core::w!("TaskbarCreated"));
+            TASKBAR_CREATED.set(taskbar_created);
             // Explorer broadcasts TaskbarCreated only to top-level windows.
             let hwnd = CreateWindowExW(
-                0,
+                WS_EX_TOOLWINDOW,
                 CLASS,
                 CLASS,
                 WS_POPUP,
@@ -94,6 +95,10 @@ impl Tray {
                 UnregisterClassW(CLASS, module);
                 return Err(error);
             }
+            // Explorer can run at a lower integrity level than this process.
+            if taskbar_created != 0 {
+                ChangeWindowMessageFilterEx(hwnd, taskbar_created, MSGFLT_ALLOW, ptr::null_mut());
+            }
             let (sender, requests) = mpsc::channel(1);
             if let Ok(mut slot) = BALLOONS.lock() {
                 *slot = Some(sender);
@@ -107,6 +112,7 @@ impl Tray {
                     ..Default::default()
                 },
                 available: false,
+                retry_at: None,
                 next_id: 1,
                 requests,
                 active: None,
@@ -123,6 +129,8 @@ impl Tray {
         copy_text(&mut self.data.szTip, "Stonks Chat");
         // SAFETY: data is initialized and the owned tray window is still alive.
         self.available = unsafe { Shell_NotifyIconW(NIM_ADD, &self.data) != 0 };
+        // Explorer may not be ready, even when it has already broadcast TaskbarCreated.
+        self.retry_at = (!self.available).then(|| Instant::now() + RETRY_INTERVAL);
         ICON_ID.set(if self.available { self.data.uID } else { 0 });
     }
 
@@ -144,8 +152,13 @@ impl Tray {
 
     pub(super) fn poll(&mut self) -> Option<Action> {
         if RESTARTED.replace(false) {
-            self.available = false;
+            // TaskbarCreated can also follow a DPI change; delete any surviving icon.
             self.remove();
+            self.install();
+        } else if self
+            .retry_at
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
             self.install();
         }
         let event = BALLOON_EVENT.take();

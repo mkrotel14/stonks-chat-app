@@ -89,20 +89,10 @@ fn is_youtube_url(value: &str) -> bool {
     )
 }
 
-fn tool_directories(
-    resource_directory: Option<PathBuf>,
-    executable_directory: Option<PathBuf>,
-) -> Vec<PathBuf> {
+fn tool_directories(executable_directory: Option<PathBuf>) -> Vec<PathBuf> {
     let mut directories = Vec::new();
-    if let Some(directory) = resource_directory {
-        // Bundled RPM resources retain the configured `resources/media`
-        // path below Tauri's application resource directory.
-        directories.push(directory.join("resources").join("media"));
-        directories.push(directory.join("media"));
-        directories.push(directory);
-    }
     if let Some(directory) = executable_directory {
-        // `tauri build --no-bundle` places configured resources here.
+        // The Windows installer places media tools beside the app under resources/media.
         directories.push(directory.join("resources").join("media"));
         directories.push(directory.join("media"));
         directories.push(directory);
@@ -126,29 +116,21 @@ pub(super) fn tool_path(name: &str) -> PathBuf {
         name.to_owned()
     };
     let directories = tool_directories(
-        None,
         std::env::current_exe()
             .ok()
             .and_then(|current| current.parent().map(PathBuf::from)),
     );
-    for directory in directories {
-        let direct = directory.join(&executable);
-        if direct.is_file() {
-            return direct;
-        }
-        if let Ok(entries) = std::fs::read_dir(&directory) {
-            if let Some(path) = entries.flatten().map(|entry| entry.path()).find(|path| {
-                path.file_name()
-                    .and_then(|value| value.to_str())
-                    .is_some_and(|value| {
-                        value == executable || value.starts_with(&format!("{name}-"))
-                    })
-            }) {
-                return path;
-            }
-        }
-    }
-    PathBuf::from(executable)
+    find_tool(&executable, directories)
+}
+
+fn find_tool(executable: &str, directories: Vec<PathBuf>) -> PathBuf {
+    // The packages ship canonical names; use the override for custom filenames.
+    // Prefix matches can select directories, notices, or unrelated binaries.
+    directories
+        .into_iter()
+        .map(|directory| directory.join(executable))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(executable))
 }
 
 pub(super) async fn resolve_media(
@@ -466,11 +448,36 @@ mod tests {
     }
 
     #[test]
-    fn bundled_tool_candidates_include_tauri_rpm_resource_layout() {
-        let directories = tool_directories(Some(PathBuf::from("/usr/lib/Stonks")), None);
+    fn finds_canonical_windows_tools_in_the_installed_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let app = root.path().join("Stonks GPUI");
+        let media = app.join("resources").join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        for tool in ["ffmpeg.exe", "yt-dlp.exe", "deno.exe"] {
+            let bundled = media.join(tool);
+            std::fs::write(&bundled, []).unwrap();
+            std::fs::write(app.join(tool), []).unwrap();
+            assert_eq!(
+                find_tool(tool, tool_directories(Some(app.clone()))),
+                bundled
+            );
+        }
+    }
+
+    #[test]
+    fn skips_non_tools_and_falls_back_to_the_path_name() {
+        let root = tempfile::tempdir().unwrap();
+        let media = root.path().join("resources").join("media");
+        std::fs::create_dir_all(media.join("ffmpeg.exe")).unwrap();
+        std::fs::write(media.join("ffmpeg-license.txt"), []).unwrap();
+        let directories = vec![media, root.path().to_owned()];
+        let alternate = root.path().join("ffmpeg.exe");
+        std::fs::write(&alternate, []).unwrap();
+        assert_eq!(find_tool("ffmpeg.exe", directories.clone()), alternate);
+        std::fs::remove_file(alternate).unwrap();
         assert_eq!(
-            directories.first(),
-            Some(&PathBuf::from("/usr/lib/Stonks/resources/media"))
+            find_tool("ffmpeg.exe", directories),
+            PathBuf::from("ffmpeg.exe")
         );
     }
 
