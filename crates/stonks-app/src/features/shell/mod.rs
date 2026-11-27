@@ -34,6 +34,7 @@ mod panels;
 mod people;
 mod render;
 pub(crate) mod shortcuts;
+mod update;
 mod wiring;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -80,6 +81,7 @@ pub struct ShellView {
     account_settings: Option<Entity<super::settings::Settings>>,
     account_settings_sub: Option<Subscription>,
     account_settings_observe: Option<Subscription>,
+    update_details: Option<Entity<super::app::updater::details::Details>>,
     overlay_focus: Option<FocusHandle>,
     overlay_container: FocusHandle,
     drawer: Option<Explorer>,

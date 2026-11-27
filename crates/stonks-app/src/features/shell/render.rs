@@ -385,7 +385,21 @@ impl Render for ShellView {
         let mut root = div()
             .id("shell-root")
             .relative()
+            .on_action(
+                cx.listener(|this, _: &super::update::ShowUpdateDetails, window, cx| {
+                    this.open_update_details(false, window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &super::update::ConfirmUpdate, window, cx| {
+                    this.open_update_details(true, window, cx);
+                }),
+            )
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.update_details_open(cx) {
+                    // The top-most dialog owns Escape and focus; leave account settings open.
+                    return;
+                }
                 if event.keystroke.key == "escape" && this.voice.read(cx).music_playlist_open(cx) {
                     this.voice
                         .update(cx, |voice, cx| voice.dismiss_music_playlist(window, cx));
@@ -515,6 +529,7 @@ impl Render for ShellView {
             self.voice
                 .update(cx, |voice, cx| voice.camera_setup_surface(window, cx)),
         )
+        .children(self.update_details.clone())
     }
 }
 

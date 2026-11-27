@@ -1,10 +1,13 @@
 //! The Fedora 44 x86-64 GPUI RPM only, not the legacy Tauri package.
 
 use super::{
-    linux::{authorize, stdout},
+    linux::{self, stdout},
     rpm_version, Candidate, Installed, Kind, Result, MANAGED,
 };
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 pub(super) const DNF: &str = "/usr/bin/dnf";
 const RPM: &str = "/usr/bin/rpm";
@@ -35,16 +38,15 @@ fn identity(info: &str) -> Result<Installed> {
     Err("Unexpected Fedora package name, epoch, version, release, or architecture.".into())
 }
 
-pub(super) fn installed() -> Result<Installed> {
-    if std::env::var_os("APPIMAGE").is_some()
-        || std::env::current_exe().ok().as_deref() != Some(Path::new(MANAGED))
-        || !std::fs::read_to_string("/etc/os-release").is_ok_and(|info| fedora_44(&info))
-    {
-        return Err("This is not a managed Fedora 44 installation.".into());
-    }
+pub(super) fn supported_distro() -> bool {
+    std::fs::read_to_string("/etc/os-release").is_ok_and(|info| fedora_44(&info))
+}
+
+pub(super) fn installed_at(executable: &Path) -> Result<Installed> {
     identity(&stdout(
         Command::new(RPM)
-            .args(["-qf", "--qf", QUERY, "--", MANAGED])
+            .args(["-qf", "--qf", QUERY, "--"])
+            .arg(executable)
             .output(),
     )?)
 }
@@ -58,7 +60,11 @@ fn verify_package(candidate: &Candidate, info: &str, files: &str) -> Result<()> 
     Ok(())
 }
 
-pub(super) fn install(candidate: &Candidate, path: &Path, installing: impl FnOnce()) -> Result<()> {
+pub(super) fn install(
+    candidate: &Candidate,
+    path: &Path,
+    installing: impl FnOnce(),
+) -> Result<PathBuf> {
     let info = stdout(
         Command::new(RPM)
             .args(["-qp", "--qf", QUERY, "--"])
@@ -67,13 +73,7 @@ pub(super) fn install(candidate: &Candidate, path: &Path, installing: impl FnOnc
     )?;
     let files = stdout(Command::new(RPM).args(["-qpl", "--"]).arg(path).output())?;
     verify_package(candidate, &info, &files)?;
-    super::still_installed(candidate)?;
-    installing();
-    authorize(DNF, &["install", "-y"], path)?;
-    if installed()?.version != candidate.version {
-        return Err("RPM did not report the expected installed package version.".into());
-    }
-    Ok(())
+    linux::install(candidate, DNF, &["install", "-y"], path, installing)
 }
 
 #[cfg(test)]
@@ -103,6 +103,8 @@ mod tests {
             url: String::new(),
             size: 0,
             digest: String::new(),
+            release_name: None,
+            release_notes: None,
         };
         assert!(verify_package(&candidate, info, "/usr/bin/stonks-app\n").is_ok());
         assert!(verify_package(&candidate, info, "/usr/bin/stonks\n").is_err());

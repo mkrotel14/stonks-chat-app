@@ -1,7 +1,7 @@
 //! Compact home routes, independent of the wide shell's automatic selection.
 use super::*;
 use stonks_core::connection::{AppSnapshot, ClientServer};
-use stonks_ui::components::{draggable_chrome, window_controls};
+use stonks_ui::components::draggable_chrome;
 
 pub(super) const TAB_BOTTOM_MARGIN: f32 = 12.;
 
@@ -158,6 +158,7 @@ impl ShellView {
                 window,
                 cx,
             ))
+            .children(super::update::header_update(theme, cx))
             .when(server, |header| {
                 header.child(
                     Button::new("compact-members", theme)
@@ -171,7 +172,7 @@ impl ShellView {
             })
             .when(
                 window.window_controls().minimize || cfg!(target_os = "windows"),
-                |header| header.child(window_controls(&theme, window)),
+                |header| header.child(crate::desktop::main_window_controls(&theme, window)),
             )
     }
 

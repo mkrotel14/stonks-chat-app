@@ -273,6 +273,7 @@ impl ShellView {
                 let crop = cx.global::<file_picker::CropService>().0.clone();
                 crop.update(cx, |crop, cx| crop.reset(window, cx));
                 this.clear_account_settings(cx);
+                this.update_details = None;
                 this.settings = None;
                 this.settings_sub = None;
                 this.drawer = None;
@@ -327,6 +328,7 @@ impl ShellView {
             account_settings: None,
             account_settings_sub: None,
             account_settings_observe: None,
+            update_details: None,
             overlay_focus: None,
             overlay_container: cx.focus_handle(),
             drawer: None,

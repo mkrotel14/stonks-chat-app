@@ -28,6 +28,24 @@ use std::{
     time::Duration,
 };
 
+fn update_blocks_close(cx: &App) -> bool {
+    crate::features::app::updater::Updater::shared(cx).is_some_and(|updater| {
+        use crate::features::app::updater::Status;
+        matches!(
+            updater.read(cx).status,
+            Status::Downloading | Status::Verifying | Status::Installing
+        )
+    })
+}
+
+pub(crate) fn main_window_controls(theme: &stonks_ui::Theme, window: &Window) -> gpui_kit::Div {
+    stonks_ui::components::window_controls_with_close(theme, window, |_, window, cx| {
+        if !update_blocks_close(cx) {
+            window.remove_window();
+        }
+    })
+}
+
 pub(crate) const APP_ID: &str = "com.rdxlabs.stonks.gpui";
 
 /// Latest validated launch link, retained across startup and authentication.
@@ -240,6 +258,9 @@ impl Lifecycle {
         }
         let lifecycle = Rc::downgrade(self);
         window.on_window_should_close(cx, move |window, _cx| {
+            if update_blocks_close(_cx) {
+                return false;
+            }
             if let Some(lifecycle) = lifecycle.upgrade() {
                 lifecycle.state.borrow_mut().capture(window.window_bounds());
                 #[cfg(target_os = "windows")]
@@ -352,7 +373,9 @@ impl Lifecycle {
                     {
                         match action {
                             tray::Action::Show => self.show(cx),
-                            tray::Action::Hide if self.tray_available(cx) => {
+                            tray::Action::Hide
+                                if self.tray_available(cx) && !update_blocks_close(cx) =>
+                            {
                                 if let Some(handle) = self.window.get() {
                                     let _ = handle.update(cx, |_, window, _| {
                                         self.state.borrow_mut().capture(window.window_bounds());
@@ -362,8 +385,10 @@ impl Lifecycle {
                             }
                             tray::Action::Hide => {}
                             tray::Action::Quit => {
-                                cx.quit();
-                                return false;
+                                if !update_blocks_close(cx) {
+                                    cx.quit();
+                                    return false;
+                                }
                             }
                         }
                     }
@@ -376,15 +401,19 @@ impl Lifecycle {
                             .and_then(tray_windows::Tray::poll);
                         match action {
                             Some(tray_windows::Action::Show) => self.show(cx),
-                            Some(tray_windows::Action::Hide) if self.tray_available(cx) => {
+                            Some(tray_windows::Action::Hide)
+                                if self.tray_available(cx) && !update_blocks_close(cx) =>
+                            {
                                 if let Some(handle) = self.window.get() {
                                     let _ =
                                         handle.update(cx, |_, window, _| self.hide_windows(window));
                                 }
                             }
                             Some(tray_windows::Action::Quit) => {
-                                cx.quit();
-                                return false;
+                                if !update_blocks_close(cx) {
+                                    cx.quit();
+                                    return false;
+                                }
                             }
                             _ => {}
                         }

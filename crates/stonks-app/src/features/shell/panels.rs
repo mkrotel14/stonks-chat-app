@@ -186,7 +186,8 @@ impl ShellView {
             || self.has_overlay_other_than_message_panel(cx)
     }
     pub(super) fn has_overlay_other_than_message_panel(&self, cx: &App) -> bool {
-        self.account_settings.is_some()
+        self.update_details_open(cx)
+            || self.account_settings.is_some()
             || self.friends_dialog_open(cx)
             || self.image_viewer.read(cx).is_open()
             || self.context_menu.read(cx).is_open()

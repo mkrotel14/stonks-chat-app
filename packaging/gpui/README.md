@@ -24,7 +24,7 @@ All three artifacts carry the same release binary, desktop entry, icon and notic
 
 Desktop Settings → Updates checks the latest stable release in `mkrotel14/stonks-chat-app`. For updates to reach both package identities, attach both unmodified Arch artifacts to that GitHub release, with a tag of `v<version>` (or `<version>`) matching the packaged version. CI artifacts alone are not an update channel. The updater requires the matching asset's GitHub-provided SHA-256 digest and byte size; it does not use `SHA256SUMS` or bypass local pacman signature policy. This trusts GitHub and the pinned repository's release publishers, not an independent package signature.
 
-Only x86-64 Arch installs whose running binary is `/usr/bin/stonks-app` and is owned by one of the supported packages can install in-app. The user must confirm the exact package/version before downloading and then authorize `pkexec` via a desktop polkit agent. Pacman updates the same package identity with no forced overwrite. Restart the application after it reports success. AppImage and unmanaged builds remain discovery-only.
+Only x86-64 Arch installs whose running binary is `/usr/bin/stonks-app` and is owned by one of the supported packages can install in-app. The user must confirm the exact package/version before downloading and then authorize `pkexec` via a desktop polkit agent. Pacman updates the same package identity with no forced overwrite. The app requests a restart after confirming the replacement package version at the installed executable path. AppImage and unmanaged builds remain discovery-only.
 
 ## Fedora 44 x86_64 native RPM
 

@@ -2,10 +2,11 @@
 
 use super::super::{
     navigation::view::{channel_icon, channel_label},
+    update::header_update,
     *,
 };
 use stonks_core::connection::{AppSnapshot, ClientChannel, ClientServer};
-use stonks_ui::components::{draggable_chrome, window_controls};
+use stonks_ui::components::draggable_chrome;
 
 impl ShellView {
     pub(in crate::features::shell) fn close_message_panel(
@@ -144,14 +145,19 @@ impl ShellView {
                                 title.child(
                                     Button::new("toggle-channels", theme)
                                         .variant(ButtonVariant::IconSmall)
-                                        .tooltip(t(if self
-                                            .fitted_explorer_widths(f32::from(window.viewport_size().width))
-                                            .0 > 0.
-                                        {
-                                            "shell.hideChannels"
-                                        } else {
-                                            "shell.showChannels"
-                                        }))
+                                        .tooltip(t(
+                                            if self
+                                                .fitted_explorer_widths(f32::from(
+                                                    window.viewport_size().width,
+                                                ))
+                                                .0
+                                                > 0.
+                                            {
+                                                "shell.hideChannels"
+                                            } else {
+                                                "shell.showChannels"
+                                            },
+                                        ))
                                         .leading(
                                             Icon::PanelLeft.render_stroke(theme.text, 18., 1.8),
                                         )
@@ -198,6 +204,7 @@ impl ShellView {
                             .flex_shrink_0()
                             .items_center()
                             .gap(px(theme.space1))
+                            .children(header_update(theme, cx))
                             .when(can_settings && has_channel, |actions| {
                                 actions.child(
                                     Button::new("header-settings", theme)
@@ -265,7 +272,7 @@ impl ShellView {
                     )
                     .when(
                         window.window_controls().minimize || cfg!(target_os = "windows"),
-                        |header| header.child(window_controls(&theme, window)),
+                        |header| header.child(crate::desktop::main_window_controls(&theme, window)),
                     ),
             )
             .children(read_error.map(|error| {

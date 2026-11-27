@@ -1,10 +1,13 @@
 //! Arch package ownership, version ordering and installation.
 
 use super::{
-    linux::{authorize, stdout},
-    Candidate, Installed, Kind, Result, MANAGED,
+    linux::{self, stdout},
+    Candidate, Installed, Kind, Result,
 };
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 const PACMAN: &str = "/usr/bin/pacman";
 
@@ -14,17 +17,12 @@ fn pacman() -> Command {
     command
 }
 
-pub(super) fn eligible() -> bool {
-    std::env::var_os("APPIMAGE").is_none()
-        && Path::new("/etc/arch-release").is_file()
-        && std::env::current_exe().ok().as_deref() == Some(Path::new(MANAGED))
+pub(super) fn supported_distro() -> bool {
+    Path::new("/etc/arch-release").is_file()
 }
 
-pub(super) fn installed() -> Result<Installed> {
-    if !eligible() {
-        return Err("This is not a managed Arch installation.".into());
-    }
-    let owner = stdout(pacman().args(["-Qoq", "--", MANAGED]).output())?;
+pub(super) fn installed_at(executable: &Path) -> Result<Installed> {
+    let owner = stdout(pacman().args(["-Qoq", "--"]).arg(executable).output())?;
     let name = owner.trim();
     if !matches!(name, "stonks" | "stonks-gpui") {
         return Err("The executable is not owned by a supported Stonks package.".into());
@@ -72,14 +70,18 @@ pub(super) fn verify_package(candidate: &Candidate, info: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn install(candidate: &Candidate, path: &Path, installing: impl FnOnce()) -> Result<()> {
-    let info = stdout(pacman().args(["-Qip", "--"]).arg(&path).output())?;
+pub(super) fn install(
+    candidate: &Candidate,
+    path: &Path,
+    installing: impl FnOnce(),
+) -> Result<PathBuf> {
+    let info = stdout(pacman().args(["-Qip", "--"]).arg(path).output())?;
     verify_package(candidate, &info)?;
-    super::still_installed(candidate)?;
-    installing();
-    authorize(PACMAN, &["-U", "--noconfirm", "--"], path)?;
-    if installed()?.version != candidate.version {
-        return Err("Pacman did not report the expected installed package version.".into());
-    }
-    Ok(())
+    linux::install(
+        candidate,
+        PACMAN,
+        &["-U", "--noconfirm", "--"],
+        path,
+        installing,
+    )
 }

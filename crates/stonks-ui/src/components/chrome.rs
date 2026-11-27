@@ -54,13 +54,24 @@ pub fn draggable_chrome(
 /// not an option: Hyprland answers xdg-decoration with server-side mode
 /// yet draws nothing itself.
 pub fn window_controls(theme: &Theme, window: &Window) -> Div {
+    window_controls_with_close(theme, window, |_, window, _| window.remove_window())
+}
+
+pub fn window_controls_with_close(
+    theme: &Theme,
+    window: &Window,
+    close: fn(&ClickEvent, &mut Window, &mut App),
+) -> Div {
     let supported = window.window_controls();
     let maximized = window.is_maximized();
 
     let is_windows = cfg!(target_os = "windows");
     let show_controls = is_windows || supported.minimize;
 
-    let control = |id: &'static str, icon: Icon, color: Rgba, hover_bg: Rgba,
+    let control = |id: &'static str,
+                   icon: Icon,
+                   color: Rgba,
+                   hover_bg: Rgba,
                    on_click: fn(&ClickEvent, &mut Window, &mut App)| {
         div()
             .id(id)
@@ -101,7 +112,7 @@ pub fn window_controls(theme: &Theme, window: &Window) -> Div {
             Icon::X,
             theme.danger,
             mix_color(theme.surface_raised, theme.danger, 0.14),
-            |_, window, _| window.remove_window(),
+            close,
         ));
     }
     controls

@@ -20,7 +20,16 @@ pub(crate) use managed::Candidate;
     target_arch = "x86_64",
     any(target_os = "linux", target_os = "windows")
 ))]
-use managed::{InstalledAction, Kind};
+use managed::{InstallEvent, Outcome};
+
+#[path = "app_updater/details.rs"]
+pub(crate) mod details;
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_os = "linux", target_os = "windows")
+))]
+#[path = "app_updater/progress.rs"]
+mod progress;
 
 pub(crate) const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -28,6 +37,12 @@ pub(crate) const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) struct Updater {
     pub(crate) status: Status,
     task: Option<Task<()>>,
+    pub(crate) progress: Option<(u64, u64)>,
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    ))]
+    retry: Option<Candidate>,
 }
 
 #[derive(Default)]
@@ -43,10 +58,13 @@ pub(crate) enum Status {
     ))]
     Available(Candidate),
     Current,
-    Confirming,
     Downloading,
+    Verifying,
     Installing,
-    Installed,
+    #[cfg(target_os = "linux")]
+    Restarting,
+    #[cfg(target_os = "windows")]
+    InstallerLaunched,
     InstallFailed(String),
 }
 
@@ -54,8 +72,20 @@ impl Status {
     pub(crate) fn busy(&self) -> bool {
         matches!(
             self,
-            Self::Checking | Self::Confirming | Self::Downloading | Self::Installing
+            Self::Checking | Self::Downloading | Self::Verifying | Self::Installing
         )
+    }
+
+    pub(crate) fn handing_off(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if matches!(self, Self::Restarting) {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        if matches!(self, Self::InstallerLaunched) {
+            return true;
+        }
+        false
     }
 }
 
@@ -82,7 +112,7 @@ impl Updater {
     }
 
     pub(crate) fn check(&mut self, cx: &mut Context<Self>) {
-        if self.status.busy() || matches!(self.status, Status::Installed) {
+        if self.status.busy() || self.status.handing_off() {
             return;
         }
         self.status = Status::Checking;
@@ -123,79 +153,73 @@ impl Updater {
     any(target_os = "linux", target_os = "windows")
 ))]
 impl Updater {
-    pub(crate) fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use stonks_ui::i18n::t;
-
+    pub(crate) fn begin_install(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Status::Available(candidate) = &self.status else {
             return;
         };
-        if window.has_active_prompt() {
-            return;
-        }
         let candidate = candidate.clone();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t("settings.desktop.archConfirm"),
-            Some(&format!(
-                "{}\n{}",
-                candidate.label(),
-                t(match candidate.kind() {
-                    Kind::Arch => "settings.desktop.archConfirmDetail",
-                    Kind::Rpm => "settings.desktop.rpmConfirmDetail",
-                    Kind::Windows => "settings.desktop.windowsConfirmDetail",
-                })
-            )),
-            &[
-                PromptButton::cancel(t("common.cancel")),
-                PromptButton::new(t("settings.desktop.archInstall")),
-            ],
-            cx,
-        );
-        self.status = Status::Confirming;
-        self.task = Some(cx.spawn(async move |this, cx| {
-            if !matches!(answer.await, Ok(1)) {
-                let _ = this.update(cx, |updater, cx| {
-                    updater.status = Status::Available(candidate);
-                    cx.notify();
-                });
-                return;
+        progress::open(window, cx);
+        self.install(candidate, cx);
+    }
+
+    pub(crate) fn retry_install(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.status, Status::InstallFailed(_)) {
+            if let Some(candidate) = self.retry.clone() {
+                self.install(candidate, cx);
             }
-            if this
-                .update(cx, |updater, cx| {
-                    updater.status = Status::Downloading;
-                    cx.notify();
-                })
-                .is_err()
-            {
-                return;
-            }
-            let (sender, receiver) = futures_channel::oneshot::channel();
-            let installer = spawn_core(managed::install(candidate, move || {
-                let _ = sender.send(());
-            }));
-            if receiver.await.is_ok() {
-                let _ = this.update(cx, |updater, cx| {
-                    updater.status = Status::Installing;
-                    cx.notify();
-                });
-            }
-            let result = installer.await;
-            let _ = this.update(cx, |updater, cx| {
-                updater.status = match &result {
-                    Ok(_) => Status::Installed,
-                    Err(error) => Status::InstallFailed(error.clone()),
-                };
+        }
+    }
+
+    pub(crate) fn dismiss_install_failure(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.status, Status::InstallFailed(_)) {
+            if let Some(candidate) = self.retry.take() {
+                self.status = Status::Available(candidate);
                 cx.notify();
+            }
+        }
+    }
+
+    fn install(&mut self, candidate: Candidate, cx: &mut Context<Self>) {
+        self.retry = Some(candidate.clone());
+        self.progress = None;
+        self.status = Status::Downloading;
+        self.task = Some(cx.spawn(async move |this, cx| {
+            let (sender, mut receiver) = tokio::sync::watch::channel(None);
+            let install = spawn_core(managed::install_with_events(candidate, move |event| {
+                sender.send_replace(Some(event));
+            }));
+            while receiver.changed().await.is_ok() {
+                if let Some(event) = *receiver.borrow_and_update() {
+                    let _ = this.update(cx, |updater, cx| {
+                        updater.status = match event {
+                            InstallEvent::DownloadProgress { downloaded, total } => {
+                                updater.progress = Some((downloaded, total));
+                                Status::Downloading
+                            }
+                            InstallEvent::Verifying => Status::Verifying,
+                            InstallEvent::Installing => Status::Installing,
+                        };
+                        cx.notify();
+                    });
+                }
+            }
+            let result = install.await;
+            let _ = this.update(cx, |updater, cx| {
                 match result {
                     #[cfg(target_os = "linux")]
-                    Ok(InstalledAction::Restart) => {
-                        cx.set_restart_path("/usr/bin/stonks-app".into());
+                    Ok(Outcome::Restart(path)) => {
+                        updater.status = Status::Restarting;
+                        cx.set_restart_path(path);
                         cx.restart();
                     }
                     #[cfg(target_os = "windows")]
-                    Ok(InstalledAction::Quit) => cx.quit(),
-                    _ => {}
+                    Ok(Outcome::HandedOff) => {
+                        updater.status = Status::InstallerLaunched;
+                        cx.quit();
+                    }
+                    Err(error) => updater.status = Status::InstallFailed(error),
                 }
+                cx.notify();
             });
         }));
         cx.notify();

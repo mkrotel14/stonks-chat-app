@@ -8,7 +8,7 @@ use gpui_kit::*;
 use stonks_core::http::HttpPolicy;
 use stonks_core::server::CONFIG_FILE;
 use stonks_core::session::SessionStore;
-use stonks_ui::components::{draggable_chrome, window_controls, Button, ButtonVariant};
+use stonks_ui::components::{draggable_chrome, Button, ButtonVariant};
 use stonks_ui::i18n::t;
 use stonks_ui::icons::Icon;
 use stonks_ui::{fonts, Theme};
@@ -48,12 +48,14 @@ enum Screen {
 
 enum StartupPhase {
     CheckingRelease,
+    OfferingUpdate,
     Restoring,
 }
 
 pub struct AppView {
     screen: Screen,
     splash_brand: Arc<Image>,
+    startup_update: Option<(Entity<updater::details::Details>, Subscription)>,
     auth: Entity<AuthScreen>,
     picker: Entity<ServerPicker>,
     session: Entity<Session>,
@@ -103,7 +105,12 @@ impl AppView {
             )
         });
 
+        let updater = updater::Updater::start(cx);
         let subscriptions = vec![
+            cx.observe_in(&updater, window, |this, updater, window, cx| {
+                let checking = matches!(updater.read(cx).status, updater::Status::Checking);
+                this.handle_startup_check(checking, window, cx);
+            }),
             cx.observe_global_in::<PendingDeepLink>(window, Self::route_pending_link),
             cx.observe_in(&session, window, |this, _, window, cx| {
                 this.route_pending_link(window, cx);
@@ -163,24 +170,25 @@ impl AppView {
             }),
         ];
 
-        // Share the startup check with Desktop settings, without blocking auth
-        // on the public release service.
-        updater::Updater::start(cx);
-        let app = cx.entity().downgrade();
-        window.on_next_frame(move |window, _| {
-            window.on_next_frame(move |_, cx| {
-                let _ = app.update(cx, |this, cx| {
-                    if matches!(this.screen, Screen::Startup(StartupPhase::CheckingRelease)) {
-                        this.screen = Screen::Startup(StartupPhase::Restoring);
-                        this.auth.update(cx, |auth, cx| auth.restore_session(cx));
-                        cx.notify();
-                    }
-                });
-            });
-        });
+        // A release-service timeout must not prevent normal sign-in.
+        cx.spawn(async move |this, cx| {
+            let already_checked = this
+                .update(cx, |_, cx| {
+                    !matches!(updater.read(cx).status, updater::Status::Checking)
+                })
+                .unwrap_or(true);
+            if !already_checked {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(8))
+                    .await;
+            }
+            let _ = this.update(cx, |this, cx| this.restore_after_update_check(cx));
+        })
+        .detach();
 
         Self {
             screen: Screen::Startup(StartupPhase::CheckingRelease),
+            startup_update: None,
             splash_brand: Arc::new(Image::from_bytes(
                 ImageFormat::Png,
                 include_bytes!("../../launcher/com.rdxlabs.stonks.gpui.png").to_vec(),
@@ -191,6 +199,39 @@ impl AppView {
             shell,
             _subscriptions: subscriptions,
             _appearance: appearance,
+        }
+    }
+
+    fn handle_startup_check(
+        &mut self,
+        checking: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.screen, Screen::Startup(StartupPhase::CheckingRelease)) || checking {
+            return;
+        }
+        if let Some(details) = updater::details::Details::open(false, window, cx) {
+            let subscription = cx.observe(&details, |this, details, cx| {
+                if !details.read(cx).is_open() {
+                    this.startup_update = None;
+                    this.screen = Screen::Startup(StartupPhase::CheckingRelease);
+                    this.restore_after_update_check(cx);
+                }
+            });
+            self.screen = Screen::Startup(StartupPhase::OfferingUpdate);
+            self.startup_update = Some((details, subscription));
+            cx.notify();
+        } else {
+            self.restore_after_update_check(cx);
+        }
+    }
+
+    fn restore_after_update_check(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.screen, Screen::Startup(StartupPhase::CheckingRelease)) {
+            self.screen = Screen::Startup(StartupPhase::Restoring);
+            self.auth.update(cx, |auth, cx| auth.restore_session(cx));
+            cx.notify();
         }
     }
 
@@ -270,7 +311,7 @@ impl AppView {
                         window,
                         cx,
                     ))
-                    .child(window_controls(theme, window)),
+                    .child(crate::desktop::main_window_controls(theme, window)),
             )
     }
 
@@ -339,7 +380,17 @@ impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
         if matches!(self.screen, Screen::Startup(_)) {
-            return self.startup_splash(&theme, window, cx).into_any_element();
+            let splash = self.startup_splash(&theme, window, cx);
+            return div()
+                .relative()
+                .size_full()
+                .child(splash)
+                .children(
+                    self.startup_update
+                        .as_ref()
+                        .map(|(details, _)| details.clone()),
+                )
+                .into_any_element();
         }
         if matches!(self.screen, Screen::Shell) {
             // The shell owns the whole window; its pane header carries the
@@ -425,7 +476,7 @@ impl Render for AppView {
                                     button
                                 }
                             })
-                            .child(window_controls(&theme, window)),
+                            .child(crate::desktop::main_window_controls(&theme, window)),
                     ),
             )
             .child(

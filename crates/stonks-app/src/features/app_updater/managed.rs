@@ -27,6 +27,8 @@ const MANAGED: &str = "/usr/bin/stonks-app";
 const RELEASE_API: &str = "https://api.github.com/repos/mkrotel14/stonks-chat-app/releases/latest";
 const DOWNLOAD_BASE: &str = "https://github.com/mkrotel14/stonks-chat-app/releases/download";
 const MAX_PACKAGE: u64 = 512 * 1024 * 1024;
+const MAX_RELEASE_NAME: usize = 256;
+const MAX_RELEASE_NOTES: usize = 16 * 1024;
 type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +51,8 @@ struct Installed {
 #[derive(Debug, Deserialize)]
 struct Release {
     tag_name: String,
+    name: Option<String>,
+    body_text: Option<String>,
     draft: bool,
     prerelease: bool,
     assets: Vec<Asset>,
@@ -70,18 +74,25 @@ pub(crate) struct Candidate {
     url: String,
     size: u64,
     digest: String,
+    pub(crate) release_name: Option<String>,
+    pub(crate) release_notes: Option<String>,
 }
 
 impl Candidate {
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub(crate) fn asset_name(&self) -> &str {
+        &self.name
+    }
+
     pub(super) fn kind(&self) -> Kind {
         self.installed.kind
     }
 
-    pub(crate) fn label(&self) -> String {
-        format!(
-            "{} {} → {}",
-            self.installed.name, self.installed.version, self.version
-        )
+    pub(super) fn asset_digest(&self) -> &str {
+        &self.digest
     }
 }
 
@@ -107,9 +118,7 @@ fn version_parts(version: &str) -> Option<[u64; 3]> {
 fn installed(kind: Kind) -> Result<Installed> {
     match kind {
         #[cfg(target_os = "linux")]
-        Kind::Arch => arch::installed(),
-        #[cfg(target_os = "linux")]
-        Kind::Rpm => rpm::installed(),
+        Kind::Arch | Kind::Rpm => linux::installed(kind),
         #[cfg(target_os = "windows")]
         Kind::Windows => windows::installed(),
         _ => Err("Unsupported update platform.".into()),
@@ -119,10 +128,10 @@ fn installed(kind: Kind) -> Result<Installed> {
 pub(super) fn managed_kind() -> Option<Kind> {
     #[cfg(target_os = "linux")]
     {
-        if arch::eligible() {
+        if arch::supported_distro() && linux::running_executable().is_ok() {
             return Some(Kind::Arch);
         }
-        rpm::installed().ok().map(|_| Kind::Rpm)
+        linux::installed(Kind::Rpm).ok().map(|_| Kind::Rpm)
     }
     #[cfg(target_os = "windows")]
     windows::installed().ok().map(|_| Kind::Windows)
@@ -154,6 +163,14 @@ fn rpm_version(value: &str) -> Option<([u64; 3], u64)> {
         return None;
     }
     Some((version_parts(version)?, revision.parse().ok()?))
+}
+
+fn bounded_release_text(value: Option<String>, max_bytes: usize) -> Option<String> {
+    let mut value = value?;
+    value.retain(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'));
+    let value = value.trim();
+    let value = value[..value.floor_char_boundary(max_bytes)].trim_end();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 fn select(release: Release, installed: Installed) -> Result<Option<Candidate>> {
@@ -225,6 +242,8 @@ fn select(release: Release, installed: Installed) -> Result<Option<Candidate>> {
         url,
         size: asset.size,
         digest: digest.to_ascii_lowercase(),
+        release_name: bounded_release_text(release.name, MAX_RELEASE_NAME),
+        release_notes: bounded_release_text(release.body_text, MAX_RELEASE_NOTES),
     }))
 }
 
@@ -254,7 +273,7 @@ pub(super) async fn check(kind: Kind) -> Result<Option<Candidate>> {
     let mut response = response_ok(
         client(Policy::none(), 15)?
             .get(RELEASE_API)
-            .header("Accept", "application/vnd.github+json")
+            .header("Accept", "application/vnd.github.text+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
             .await
@@ -293,14 +312,29 @@ fn verify_download(candidate: &Candidate, size: u64, hash: Sha256) -> Result<()>
     Ok(())
 }
 
-fn still_installed(candidate: &Candidate) -> Result<()> {
-    if installed(candidate.kind())? != candidate.installed {
+fn verify_unchanged(candidate: &Candidate, installed: Installed) -> Result<()> {
+    if installed != candidate.installed {
         return Err("The installed package changed. Check for updates again.".into());
     }
     Ok(())
 }
 
-async fn download(candidate: &Candidate, staging: &Path) -> Result<(tempfile::TempDir, PathBuf)> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InstallEvent {
+    DownloadProgress { downloaded: u64, total: u64 },
+    Verifying,
+    Installing,
+}
+
+async fn download(
+    candidate: &Candidate,
+    staging: &Path,
+    events: &mut (impl FnMut(InstallEvent) + Send),
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    events(InstallEvent::DownloadProgress {
+        downloaded: 0,
+        total: candidate.size,
+    });
     let mut response = response_ok(
         client(
             Policy::custom(|attempt| {
@@ -325,6 +359,7 @@ async fn download(candidate: &Candidate, staging: &Path) -> Result<(tempfile::Te
     let mut file = std::fs::File::create_new(&path).map_err(|error| error.to_string())?;
     let mut hash = Sha256::new();
     let mut size = 0;
+    let mut last_percent = 0;
     while let Some(chunk) = response
         .chunk()
         .await
@@ -336,29 +371,41 @@ async fn download(candidate: &Candidate, staging: &Path) -> Result<(tempfile::Te
         }
         hash.update(&chunk);
         file.write_all(&chunk).map_err(|error| error.to_string())?;
+        // Bound the event count even when the response arrives in very small chunks.
+        let percent = size * 100 / candidate.size;
+        if percent > last_percent {
+            last_percent = percent;
+            events(InstallEvent::DownloadProgress {
+                downloaded: size,
+                total: candidate.size,
+            });
+        }
     }
     drop(file);
+    events(InstallEvent::Verifying);
     verify_download(candidate, size, hash)?;
     Ok((directory, path))
 }
 
-pub(super) enum InstalledAction {
+pub(super) enum Outcome {
+    /// The package manager confirmed installation; pass this path to GPUI's restart.
     #[cfg(target_os = "linux")]
-    ManualRestart,
-    #[cfg(target_os = "linux")]
-    Restart,
+    Restart(PathBuf),
+    /// Setup was launched and waits for our process to exit; installation is unconfirmed.
     #[cfg(target_os = "windows")]
-    Quit,
+    HandedOff,
 }
 
-pub(super) async fn install(
+/// Reports download progress and verification, then `Installing`
+/// and immediately before authorization or Windows handoff. Callbacks may run off the UI thread.
+pub(super) async fn install_with_events(
     candidate: Candidate,
-    installing: impl FnOnce() + Send + 'static,
-) -> Result<InstalledAction> {
+    mut events: impl FnMut(InstallEvent) + Send + 'static,
+) -> Result<Outcome> {
     let kind = candidate.kind();
     let preflight = candidate.clone();
     let staging = tokio::task::spawn_blocking(move || {
-        still_installed(&preflight)?;
+        verify_unchanged(&preflight, installed(kind)?)?;
         #[cfg(target_os = "linux")]
         {
             linux::preflight(kind)?;
@@ -369,32 +416,30 @@ pub(super) async fn install(
     })
     .await
     .map_err(|error| error.to_string())??;
-    let (directory, path) = download(&candidate, &staging).await?;
+    let (directory, path) = download(&candidate, &staging, &mut events).await?;
     tokio::task::spawn_blocking(move || {
+        let installing = move || {
+            let mut events = events;
+            events(InstallEvent::Installing);
+        };
         #[cfg(target_os = "linux")]
         {
             let _directory = directory; // Keep private staging alive through authorization and install.
             match kind {
-                Kind::Arch => {
-                    arch::install(&candidate, &path, installing)?;
-                    Ok(InstalledAction::ManualRestart)
-                }
-                Kind::Rpm => {
-                    rpm::install(&candidate, &path, installing)?;
-                    Ok(InstalledAction::Restart)
-                }
+                Kind::Arch => arch::install(&candidate, &path, installing).map(Outcome::Restart),
+                Kind::Rpm => rpm::install(&candidate, &path, installing).map(Outcome::Restart),
                 Kind::Windows => Err("Unsupported update platform.".into()),
             }
         }
         #[cfg(target_os = "windows")]
         {
-            still_installed(&candidate)?;
+            verify_unchanged(&candidate, installed(kind)?)?;
             if windows::install_dir()? != staging {
                 return Err("The installation directory changed. Check for updates again.".into());
             }
             installing();
             windows::launch(directory, &path, &candidate)?;
-            Ok(InstalledAction::Quit)
+            Ok(Outcome::HandedOff)
         }
     })
     .await
@@ -416,6 +461,8 @@ mod tests {
     fn release() -> Release {
         Release {
             tag_name: "v4.0.1".into(),
+            name: None,
+            body_text: None,
             draft: false,
             prerelease: false,
             assets: ["stonks", "stonks-gpui"]
@@ -504,6 +551,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn maps_plain_text_github_release_metadata() {
+        let filename = "Stonks.GPUI_4.0.1_x64-setup.exe";
+        let payload = serde_json::json!({
+            "tag_name": "v4.0.1",
+            "draft": false,
+            "prerelease": false,
+            "name": "  Stonks Chat 4.0.1  ",
+            "body": "**Raw Markdown**",
+            "body_html": "<strong>Rendered HTML</strong>",
+            "body_text": "  First line\r\nSecond line\u{0}  ",
+            "assets": [{
+                "name": filename,
+                "browser_download_url": format!("{DOWNLOAD_BASE}/v4.0.1/{filename}"),
+                "size": 3,
+                "digest": format!("sha256:{:x}", Sha256::digest(b"abc")),
+            }],
+        });
+        let installed = Installed {
+            kind: Kind::Windows,
+            name: "Stonks GPUI".into(),
+            version: "4.0.0".into(),
+        };
+        let candidate_for = |payload| {
+            select(serde_json::from_value(payload).unwrap(), installed.clone())
+                .unwrap()
+                .unwrap()
+        };
+        let candidate = candidate_for(payload.clone());
+        assert_eq!(candidate.release_name.as_deref(), Some("Stonks Chat 4.0.1"));
+        assert_eq!(
+            candidate.release_notes.as_deref(),
+            Some("First line\nSecond line")
+        );
+
+        let mut bounded = payload.clone();
+        for (field, max) in [("name", MAX_RELEASE_NAME), ("body_text", MAX_RELEASE_NOTES)] {
+            // Neither field may split the final multibyte character.
+            bounded[field] = format!("{}🎉", "a".repeat(max - 1)).into();
+        }
+        let candidate = candidate_for(bounded);
+        assert_eq!(candidate.release_name.unwrap().len(), MAX_RELEASE_NAME - 1);
+        assert_eq!(
+            candidate.release_notes.unwrap().len(),
+            MAX_RELEASE_NOTES - 1
+        );
+
+        let mut absent = payload;
+        absent["name"] = " \r\t\u{0}".into();
+        absent.as_object_mut().unwrap().remove("body_text");
+        let candidate = candidate_for(absent);
+        assert!(candidate.release_name.is_none());
+        assert!(candidate.release_notes.is_none());
+    }
+
     // Arch CI supplies the real comparison tool; non-Arch Linux can still
     // exercise metadata validation without invoking the system package manager.
     #[cfg(target_os = "linux")]
@@ -557,6 +659,8 @@ mod tests {
             url: asset.browser_download_url,
             size: asset.size,
             digest: asset.digest.unwrap()[7..].into(),
+            release_name: None,
+            release_notes: None,
         };
         let hash = |bytes| {
             let mut hash = Sha256::new();
