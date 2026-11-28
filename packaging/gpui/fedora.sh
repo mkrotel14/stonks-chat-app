@@ -74,8 +74,10 @@ case ${1:?Pass build or smoke} in
     shopt -s nullglob
     drivers=(/usr/share/vulkan/icd.d/lvp_icd*.json)
     [[ ${#drivers[@]} == 1 ]]
-    # Work around Fedora 44's Lavapipe/LLVM shader JIT crash without skipping Vulkan rendering.
-    VK_DRIVER_FILES=${drivers[0]} LP_NATIVE_VECTOR_WIDTH=128 GALLIVM_PERF=nopt \
+    # A 128-bit vector width alone still allows AVX2 gathers in Lavapipe's LLVM JIT.
+    # Cap the JIT at SSE2 and retain nopt; the optimized path can crash even with the cap.
+    VK_DRIVER_FILES=${drivers[0]} GALLIUM_OVERRIDE_CPU_CAPS=sse2 \
+      LP_NATIVE_VECTOR_WIDTH=128 GALLIVM_PERF=nopt \
       dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' \
         bash "$repo/packaging/gpui/smoke-linux.sh" /usr/bin/stonks-app --require-stable-window
     dnf -y remove stonks-gpui
