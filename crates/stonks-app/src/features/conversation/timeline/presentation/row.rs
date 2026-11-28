@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use gpui_kit::component::text::TextView;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use stonks_core::messages::models::TimelineMessage;
@@ -391,6 +392,68 @@ struct MessageRender<'a> {
     players: Entity<MediaPlayers>,
 }
 
+// Use the native selection surface only when it won't replace any of the chat
+// renderer's formatting or interactive objects (including concealed spoilers).
+fn selectable_plain_source(content: &str) -> Option<String> {
+    let blocks = markdown::parse_blocks(content);
+    let [markdown::Block::Paragraph(lines)] = blocks.as_slice() else {
+        return None;
+    };
+    if lines.iter().any(|line| line.trim() != line)
+        || markdown::tokenize_inline(&lines.join("\n"))
+            .iter()
+            .any(|run| {
+                run.flags != markdown::RunFlags::default() || run.payload != markdown::Payload::None
+            })
+        || !stonks_ui::components::emoji::emoji_spans(content).is_empty()
+    {
+        return None;
+    }
+
+    // Feed the toolkit literal text, not user-controlled Markdown/HTML. Hard
+    // breaks preserve the chat renderer's single newlines within a paragraph.
+    let mut source = String::with_capacity(content.len());
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            source.push_str("\\\n");
+        }
+        for ch in line.chars() {
+            if ch.is_ascii_punctuation() {
+                source.push('\\');
+            }
+            source.push(ch);
+        }
+    }
+    Some(source)
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::selectable_plain_source;
+
+    #[test]
+    fn plain_messages_escape_markup_and_preserve_line_breaks() {
+        assert_eq!(
+            selectable_plain_source("café & tea\nnext line!").as_deref(),
+            Some("café \\& tea\\\nnext line\\!")
+        );
+    }
+
+    #[test]
+    fn rich_messages_keep_the_chat_renderer() {
+        for text in [
+            "||secret||",
+            "https://example.com",
+            "**bold**",
+            "# heading",
+            ":emoji:",
+            "a\n\nb",
+        ] {
+            assert_eq!(selectable_plain_source(text), None, "{text}");
+        }
+    }
+}
+
 fn message_row(
     render: MessageRender<'_>,
     message: &TimelineMessage,
@@ -453,9 +516,25 @@ fn message_row(
     }
     if let Some(editor) = editor {
         row = row.child(editor);
+    } else if let Some(source) = message.content.as_deref().and_then(selectable_plain_source) {
+        row = row.child(
+            div()
+                .min_w_0()
+                .text_color(theme.text)
+                .line_height(relative(if compact { 1.35 } else { 1.5 }))
+                .mt(px(if compact { 0. } else { 2. }))
+                .child(
+                    TextView::markdown(
+                        ElementId::Name(format!("message-text-{}", message.id).into()),
+                        source,
+                    )
+                    .selectable(true)
+                    .scrollable(false),
+                ),
+        );
     } else if let Some(content) = message
         .content
-        .clone()
+        .as_deref()
         .filter(|content| !content.is_empty())
     {
         row = row.child(
@@ -467,7 +546,7 @@ fn message_row(
                 })
                 .when(message.system, |content| content.italic())
                 .child(markdown::render_with_options(
-                    &content,
+                    content,
                     &message.id,
                     theme,
                     mentions,

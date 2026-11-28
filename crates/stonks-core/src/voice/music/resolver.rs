@@ -178,7 +178,7 @@ pub(super) async fn resolve_media(
     let js_runtime = format!("deno:{}", tool_path("deno").to_string_lossy());
     let output = tokio::time::timeout(
         Duration::from_secs(45),
-        Command::new(tool_path("yt-dlp"))
+        yt_dlp_command()
             .args([
                 "--no-config",
                 "--no-playlist",
@@ -202,6 +202,14 @@ pub(super) async fn resolve_media(
     parse_youtube_metadata(requested, &output.stdout)
 }
 
+fn yt_dlp_command() -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(tool_path("yt-dlp"));
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    command
+}
+
 pub(super) async fn resolve_collection(
     requested: &str,
 ) -> Result<Vec<ResolvedCollectionEntry>, String> {
@@ -212,7 +220,7 @@ pub(super) async fn resolve_collection(
     let playlist_end = (MAX_QUEUE_ITEMS + 1).to_string();
     let output = tokio::time::timeout(
         Duration::from_secs(90),
-        Command::new(tool_path("yt-dlp"))
+        yt_dlp_command()
             .args([
                 "--no-config",
                 "--flat-playlist",

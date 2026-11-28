@@ -1,20 +1,20 @@
-//! Explicit, offline draft checks with the system Hunspell CLI and dictionary.
+//! Debounced, offline draft checks with the system Hunspell CLI and dictionary.
 use super::Composer;
-use gpui_kit::{div, px, Context, Div, EntityInputHandler, ParentElement, Styled, Task, Window};
+use gpui_kit::{
+    canvas, point, px, AnyElement, ContentMask, Context, EntityInputHandler, Hsla, IntoElement,
+    SharedString, Styled, Task, UnderlineStyle, Window,
+};
 use std::{
-    collections::VecDeque,
     io::Write,
     ops::Range,
     process::{Command, Stdio},
-};
-use stonks_ui::{
-    components::{Button, ButtonVariant},
-    i18n::t,
-    Theme,
+    sync::Arc,
+    time::Duration,
 };
 
-// Keep a single request below Linux's minimum pipe capacity, so writing stdin
-// before draining stdout cannot deadlock. Also bound dictionary work per click.
+const DEBOUNCE: Duration = Duration::from_millis(400);
+// Keep stdin below Linux's minimum pipe capacity even when Hunspell writes
+// suggestions before consuming its full input.
 const MAX_WORDS: usize = 60;
 const MAX_WORD_BYTES: usize = 64;
 
@@ -23,30 +23,29 @@ pub(super) struct Spellcheck {
     enabled: bool,
     generation: u64,
     task: Option<Task<()>>,
-    review: Option<Review>,
+    running: bool,
+    snapshot: Option<Snapshot>,
+    ranges: Arc<[Range<usize>]>,
 }
 
-struct Review {
-    text: String,
-    result: Result<VecDeque<Correction>, ()>,
-    limited: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct Correction {
-    range: Range<usize>,
-    suggestions: Vec<String>,
+#[derive(Clone, PartialEq, Eq)]
+struct Snapshot {
+    text: SharedString,
+    mentions: Vec<Range<usize>>,
 }
 
 impl Spellcheck {
     pub(super) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        self.review = None;
+        if !self.running {
+            self.task = None;
+        }
+        self.snapshot = None;
+        self.ranges = Arc::default();
     }
 }
 
 impl Composer {
-    /// Host preference hook. Defaults off; disabling drops any pending results.
     pub fn set_spellcheck_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.spellcheck.enabled != enabled {
             self.spellcheck.enabled = enabled;
@@ -55,200 +54,142 @@ impl Composer {
         }
     }
 
-    fn check_spelling(&mut self, cx: &mut Context<Self>) {
-        if !self.spellcheck.enabled
-            || self.spellcheck.task.is_some()
-            || self.state.active_channel().is_none()
-            || self.state.sending_here()
-        {
-            return;
+    pub(super) fn spelling_overlay(
+        &mut self,
+        color: Hsla,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.spellcheck.enabled || self.state.active_channel().is_none() {
+            return None;
         }
-        let text = self.input.read(cx).value().to_string();
-        self.spellcheck.invalidate();
+        let text = self.input.read(cx).value();
+        let composing = self.input.update(cx, |input, cx| {
+            input.marked_text_range(window, cx).is_some()
+        });
+        if composing || text.trim().is_empty() {
+            if self.spellcheck.snapshot.is_some() {
+                self.spellcheck.invalidate();
+            }
+            return None;
+        }
+        let snapshot = Snapshot {
+            mentions: if self.state.value() == text.as_str() {
+                self.state
+                    .draft_mentions()
+                    .iter()
+                    .map(|mention| mention.range.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            text,
+        };
+        if self.spellcheck.snapshot.as_ref() != Some(&snapshot) {
+            if self.spellcheck.snapshot.is_some() {
+                self.spellcheck.invalidate();
+            }
+            if !self.spellcheck.running {
+                self.schedule_spelling(snapshot, window, cx);
+            }
+            return None;
+        }
+        if self.spellcheck.ranges.is_empty() || self.state.sending_here() {
+            return None;
+        }
+        let ranges = self.spellcheck.ranges.clone();
+        let input = self.input.clone();
+        Some(
+            canvas(
+                |_, _, _| {},
+                move |viewport, _, window, cx| {
+                    let input = input.read(cx);
+                    if input.value() != snapshot.text {
+                        return;
+                    }
+                    // Paint after textarea prepaint has published this frame's scrolled
+                    // geometry. A canvas has no hitbox and never handles editor events.
+                    window.with_content_mask(Some(ContentMask { bounds: viewport }), |window| {
+                        let style = UnderlineStyle {
+                            thickness: px(1.),
+                            color: Some(color),
+                            wavy: true,
+                        };
+                        for range in ranges.iter() {
+                            let (Some(start), Some(end)) = (
+                                input.range_to_bounds(&(range.start..range.start)),
+                                input.range_to_bounds(&(range.end..range.end)),
+                            ) else {
+                                continue;
+                            };
+                            // The public API doesn't expose per-row fragments. Don't
+                            // draw a misleading line when a word spans a soft wrap.
+                            if start.origin.y != end.origin.y {
+                                continue;
+                            }
+                            let width = (end.origin.x - start.origin.x).abs();
+                            if width > px(0.) {
+                                window.paint_underline(
+                                    point(
+                                        start.origin.x.min(end.origin.x),
+                                        start.bottom() - px(3.),
+                                    ),
+                                    width,
+                                    &style,
+                                );
+                            }
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .into_any_element(),
+        )
+    }
+
+    fn schedule_spelling(&mut self, snapshot: Snapshot, window: &Window, cx: &mut Context<Self>) {
         let generation = self.spellcheck.generation;
-        let task = cx.background_executor().spawn(async move { check(text) });
-        self.spellcheck.task = Some(cx.spawn(async move |this, cx| {
-            let review = task.await;
+        self.spellcheck.snapshot = Some(snapshot.clone());
+        self.spellcheck.task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(DEBOUNCE).await;
+            let ready = this.update_in(cx, |this, window, cx| {
+                if this.spellcheck.generation != generation {
+                    return false;
+                }
+                let ready = this.input.read(cx).value() == snapshot.text
+                    && !this.input.update(cx, |input, cx| {
+                        input.marked_text_range(window, cx).is_some()
+                    });
+                this.spellcheck.running = ready;
+                if !ready {
+                    this.spellcheck.invalidate();
+                    cx.notify();
+                }
+                ready
+            });
+            if !matches!(ready, Ok(true)) {
+                return;
+            }
+            let ranges = cx
+                .background_executor()
+                .spawn(async move { check(&snapshot).unwrap_or_default() })
+                .await;
             let _ = this.update(cx, |this, cx| {
+                this.spellcheck.running = false;
                 this.spellcheck.task = None;
-                if this.spellcheck.generation == generation
-                    && this.input.read(cx).value().as_str() == review.text
-                {
-                    this.spellcheck.review = Some(review);
+                if this.spellcheck.generation == generation {
+                    this.spellcheck.ranges = ranges.into();
                 }
                 cx.notify();
             });
         }));
-        cx.notify();
-    }
-
-    fn correct_spelling(
-        &mut self,
-        generation: u64,
-        range: Range<usize>,
-        replacement: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.spellcheck.generation != generation
-            || !self.spellcheck.enabled
-            || self.state.active_channel().is_none()
-            || self.state.sending_here()
-        {
-            return;
-        }
-        if self.input.update(cx, |input, cx| {
-            input.marked_text_range(window, cx).is_some()
-        }) {
-            return;
-        }
-        let Some(review) = &mut self.spellcheck.review else {
-            return;
-        };
-        if self.input.read(cx).value().as_str() != review.text {
-            return;
-        }
-        let Ok(corrections) = &mut review.result else {
-            return;
-        };
-        if !corrections.front().is_some_and(|item| item.range == range) {
-            return;
-        }
-        corrections.pop_front();
-        // Remaining issues are in input order. Rebase their byte ranges before
-        // the normal editor edit path later invalidates any old UI callbacks.
-        for item in corrections.iter_mut() {
-            item.range.start = item.range.start - range.len() + replacement.len();
-            item.range.end = item.range.end - range.len() + replacement.len();
-        }
-        review.text.replace_range(range.clone(), &replacement);
-        let review = self.spellcheck.review.take();
-        self.input.update(cx, |input, cx| {
-            input.set_selected_range(range, cx);
-            input.replace(replacement, window, cx);
-            input.focus(window, cx);
-        });
-        self.changed(cx);
-        self.spellcheck.review =
-            review.filter(|review| self.input.read(cx).value().as_str() == review.text);
-        cx.notify();
-    }
-
-    pub(super) fn spelling_controls(&self, theme: Theme, cx: &mut Context<Self>) -> Option<Div> {
-        let value = self.input.read(cx).value();
-        if !self.spellcheck.enabled
-            || self.state.active_channel().is_none()
-            || self.state.sending_here()
-            || value.trim().is_empty()
-        {
-            return None;
-        }
-        let pending = self.spellcheck.task.is_some();
-        let generation = self.spellcheck.generation;
-        let mut row = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(theme.space1))
-            .text_color(theme.text_muted)
-            .text_size(px(theme.font_size_sm))
-            .child(
-                Button::new("composer-spelling", theme)
-                    .variant(ButtonVariant::Quiet)
-                    .label(if pending {
-                        copy("Checking…", "Verificando…")
-                    } else {
-                        copy("Check spelling", "Verificar ortografia")
-                    })
-                    .disabled(pending)
-                    .on_click(cx.listener(|this, _, _, cx| this.check_spelling(cx))),
-            );
-        if let Some(review) = self
-            .spellcheck
-            .review
-            .as_ref()
-            .filter(|r| r.text == value.as_str())
-        {
-            match &review.result {
-                Err(()) => {
-                    row = row.child(copy(
-                        "Install Hunspell and a dictionary for your system language.",
-                        "Instale o Hunspell e um dicionário para o idioma do sistema.",
-                    ))
-                }
-                Ok(items) => {
-                    if let Some(item) = items.front() {
-                        let word = &review.text[item.range.clone()];
-                        row = row.child(format!("{}: {word}", t("settings.desktop.spellcheck")));
-                        for (index, suggestion) in item.suggestions.iter().enumerate() {
-                            let range = item.range.clone();
-                            let suggestion = suggestion.clone();
-                            row = row.child(
-                                Button::new(("composer-suggestion", index), theme)
-                                    .variant(ButtonVariant::Quiet)
-                                    .label(suggestion.clone())
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.correct_spelling(
-                                            generation,
-                                            range.clone(),
-                                            suggestion.clone(),
-                                            window,
-                                            cx,
-                                        );
-                                    })),
-                            );
-                        }
-                        let range = item.range.clone();
-                        row = row.child(
-                            Button::new("composer-skip-spelling", theme)
-                                .variant(ButtonVariant::Quiet)
-                                .label(copy("Skip", "Ignorar"))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if this.spellcheck.generation == generation {
-                                        if let Some(Review {
-                                            result: Ok(items), ..
-                                        }) = &mut this.spellcheck.review
-                                        {
-                                            if items.front().is_some_and(|item| item.range == range)
-                                            {
-                                                items.pop_front();
-                                                cx.notify();
-                                            }
-                                        }
-                                    }
-                                })),
-                        );
-                    } else {
-                        row = row.child(if review.limited {
-                            copy(
-                                "Review complete for the first 60 words.",
-                                "Revisão concluída para as primeiras 60 palavras.",
-                            )
-                        } else {
-                            copy(
-                                "Spelling review complete.",
-                                "Revisão ortográfica concluída.",
-                            )
-                        });
-                    }
-                }
-            }
-        }
-        Some(row)
     }
 }
 
-// This native-only fallback UI is intentionally kept out of shared preferences
-// and locale files. Follow the existing locale through its spellcheck label.
-fn copy(en: &'static str, pt: &'static str) -> &'static str {
-    if t("settings.desktop.spellcheck") == "Spellcheck" {
-        en
-    } else {
-        pt
-    }
-}
-
-fn words(text: &str) -> Vec<Range<usize>> {
+fn words(text: &str, mentions: &[Range<usize>]) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut ticks = 0;
     let mut offset = 0;
@@ -289,9 +230,15 @@ fn words(text: &str) -> Vec<Range<usize>> {
                     && word.chars().filter(|c| c.is_alphabetic()).count() >= 2
                 {
                     let b = start + begin + front;
-                    ranges.push(b..b + word.len());
-                    if ranges.len() > MAX_WORDS {
-                        return ranges;
+                    let range = b..b + word.len();
+                    if !mentions
+                        .iter()
+                        .any(|mention| mention.start < range.end && range.start < mention.end)
+                    {
+                        ranges.push(range);
+                        if ranges.len() == MAX_WORDS {
+                            return ranges;
+                        }
                     }
                 }
                 begin = i + c.len_utf8();
@@ -301,23 +248,16 @@ fn words(text: &str) -> Vec<Range<usize>> {
     ranges
 }
 
-fn check(text: String) -> Review {
-    let mut ranges = words(&text);
-    let limited = ranges.len() > MAX_WORDS;
-    ranges.truncate(MAX_WORDS);
-    let result = if ranges.is_empty() {
-        Ok(VecDeque::new())
+fn check(snapshot: &Snapshot) -> Result<Vec<Range<usize>>, ()> {
+    let ranges = words(&snapshot.text, &snapshot.mentions);
+    if ranges.is_empty() {
+        Ok(ranges)
     } else {
-        run(&text, ranges)
-    };
-    Review {
-        text,
-        result,
-        limited,
+        run(&snapshot.text, ranges)
     }
 }
 
-fn run(text: &str, ranges: Vec<Range<usize>>) -> Result<VecDeque<Correction>, ()> {
+fn run(text: &str, ranges: Vec<Range<usize>>) -> Result<Vec<Range<usize>>, ()> {
     let mut child = Command::new("hunspell")
         .args(["-a", "-i", "UTF-8"])
         .stdin(Stdio::piped())
@@ -340,7 +280,7 @@ fn run(text: &str, ranges: Vec<Range<usize>>) -> Result<VecDeque<Correction>, ()
     parse(std::str::from_utf8(&output.stdout).map_err(|_| ())?, ranges)
 }
 
-fn parse(output: &str, ranges: Vec<Range<usize>>) -> Result<VecDeque<Correction>, ()> {
+fn parse(output: &str, ranges: Vec<Range<usize>>) -> Result<Vec<Range<usize>>, ()> {
     let mut lines = output.lines();
     if !lines.next().is_some_and(|line| line.starts_with("@(#)")) {
         return Err(());
@@ -357,25 +297,12 @@ fn parse(output: &str, ranges: Vec<Range<usize>>) -> Result<VecDeque<Correction>
         .into_iter()
         .zip(records)
         .filter_map(|(range, record)| {
-            // Some dictionaries split an apostrophized word into multiple tokens;
-            // never apply a result for only a fragment to the entire word.
-            let [line] = record else {
-                return None;
-            };
-            let suggestions = if line.starts_with(['&', '?']) {
-                line.split_once(": ")?
-                    .1
-                    .split(", ")
-                    .filter(|word| !word.is_empty() && word.len() <= MAX_WORD_BYTES)
-                    .take(4)
-                    .map(str::to_owned)
-                    .collect()
-            } else if line.starts_with('#') {
-                Vec::new()
-            } else {
-                return None;
-            };
-            Some(Correction { range, suggestions })
+            // Some dictionaries split apostrophized words. Don't mark the whole
+            // word based on a record for just one fragment.
+            match record {
+                [line] if line.starts_with(['&', '?', '#']) => Some(range),
+                _ => None,
+            }
         })
         .collect())
 }
@@ -387,7 +314,10 @@ mod tests {
     #[test]
     fn extracts_utf8_ranges_without_chat_syntax() {
         let text = "🙂 Olá, maçã! @Mary #channel <@ABC> https://example.org `co de` ``more code`` :wave: naïve spells.";
-        let extracted: Vec<_> = words(text).into_iter().map(|range| &text[range]).collect();
+        let extracted: Vec<_> = words(text, &[])
+            .into_iter()
+            .map(|range| &text[range])
+            .collect();
         assert_eq!(extracted, ["Olá", "maçã", "naïve", "spells"]);
     }
 
@@ -395,34 +325,43 @@ mod tests {
     fn maps_hunspell_records_to_original_ranges() {
         let text = "Olá wrld wrld zzzzz don't";
         let records = "@(#) Hunspell\n*\n\n& wrld 2 1: world, wild\n\n& wrld 1 1: world\n\n# zzzzz 1\n\n*\n# t 5\n\n";
-        let ranges = words(text);
+        let ranges = words(text, &[]);
         let result = parse(records, ranges.clone()).unwrap();
-        assert_eq!(result[0].range, ranges[1]);
-        assert_eq!(result[1].range, ranges[2]);
-        assert_eq!(result[0].suggestions, ["world", "wild"]);
-        assert!(result[2].suggestions.is_empty());
-        assert_eq!(result.len(), 3);
+        assert_eq!(result, ranges[1..4]);
         assert!(parse("@(#) Hunspell\n*\n\n", ranges).is_err());
     }
 
     #[test]
-    fn starts_disabled_and_invalidation_discards_results() {
+    fn excludes_entire_mention_labels_before_applying_word_limit() {
+        let text = "@Mary Jane wrld";
+        assert_eq!(words(text, &[0..10]), vec![11..15]);
+        let long = "hello ".repeat(100);
+        assert_eq!(words(&long, &[]).len(), MAX_WORDS);
+    }
+
+    #[test]
+    fn starts_disabled_and_invalidation_discards_snapshot_and_results() {
         let mut state = Spellcheck::default();
         assert!(!state.enabled);
         let generation = state.generation;
-        state.review = Some(check(String::new()));
+        state.snapshot = Some(Snapshot {
+            text: "wrld".into(),
+            mentions: vec![],
+        });
+        state.ranges = Arc::from([0..4]);
         state.invalidate();
-        assert!(state.review.is_none());
+        assert!(state.snapshot.is_none());
+        assert!(state.ranges.is_empty());
         assert_ne!(state.generation, generation);
     }
 
     #[test]
     #[ignore = "requires the system Hunspell CLI and an English dictionary"]
-    fn system_hunspell_corrects_a_typo() {
-        let review = check("hello speling".to_owned());
-        let corrections = review.result.unwrap();
-        assert_eq!(corrections.len(), 1);
-        assert_eq!(&review.text[corrections[0].range.clone()], "speling");
-        assert!(corrections[0].suggestions.iter().any(|s| s == "spelling"));
+    fn system_hunspell_marks_a_typo() {
+        let snapshot = Snapshot {
+            text: "hello speling".into(),
+            mentions: vec![],
+        };
+        assert_eq!(check(&snapshot).unwrap(), vec![6..13]);
     }
 }

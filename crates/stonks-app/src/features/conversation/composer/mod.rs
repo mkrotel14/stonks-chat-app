@@ -72,7 +72,13 @@ impl Composer {
         let subscriptions = vec![
             cx.intercept_keystrokes(move |event, window, cx| {
                 let _ = composer.update(cx, |this, cx| {
-                    this.mention_key(&event.keystroke, window, cx)
+                    let key = &event.keystroke;
+                    // Let the editor extend a selection instead of navigating suggestions.
+                    if !(key.modifiers.shift && matches!(key.key.as_str(), "up" | "down"))
+                        && this.input.read(cx).selected_range().is_empty()
+                    {
+                        this.mention_key(key, window, cx);
+                    }
                 });
             }),
             cx.observe(&input, |_, _, cx| cx.notify()),

@@ -13,6 +13,7 @@ const COMPOSER_ROW_HEIGHT: f32 = 52.;
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
+        let spelling = self.spelling_overlay(theme.danger.into(), window, cx);
         let names = self
             .state
             .active_channel()
@@ -20,7 +21,11 @@ impl Render for Composer {
             .unwrap_or_default();
         let emoji = self.emoji_button(window, cx);
         let composer = cx.entity().downgrade();
-        let mentions = self.mention_popup(window, &theme, cx);
+        let mentions = if self.input.read(cx).selected_range().is_empty() {
+            self.mention_popup(window, &theme, cx)
+        } else {
+            None
+        };
         div()
             .id("message-composer")
             .flex()
@@ -73,7 +78,6 @@ impl Render for Composer {
                         ),
                 )
             }))
-            .children(self.spelling_controls(theme, cx))
             .children((!names.is_empty()).then(|| {
                 div()
                     .text_size(px(theme.font_size_xs))
@@ -184,10 +188,12 @@ impl Render for Composer {
                                 div()
                                     .flex_1()
                                     .min_w_0()
+                                    .relative()
                                     .on_mouse_up(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
-                                            this.mentions.open = true;
+                                            this.mentions.open =
+                                                this.input.read(cx).selected_range().is_empty();
                                             this.mentions.selected = 0;
                                             cx.notify();
                                         }),
@@ -214,7 +220,8 @@ impl Render for Composer {
                                                 self.state.active_channel().is_none()
                                                     || self.state.sending_here(),
                                             ),
-                                    ),
+                                    )
+                                    .children(spelling),
                             )
                             .child(div().w(px(38.)).flex_shrink_0().child(emoji))
                             .child(

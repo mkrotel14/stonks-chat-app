@@ -185,12 +185,21 @@ impl Composer {
                         .text_size(px(theme.font_size_md))
                         .child(glyph)
                 };
+                let pointer_token = candidate.token.clone();
                 div()
                     .id(("mention-option", index))
                     .flex_shrink_0()
                     .role(Role::ListBoxOption)
                     .aria_selected(index == selected)
-                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            // Commit before the button can move focus away from the editor.
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.choose_mention(&pointer_token, window, cx);
+                        }),
+                    )
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered && this.mentions.selected != index {
                             this.mentions.selected = index;
