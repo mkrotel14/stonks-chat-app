@@ -47,12 +47,8 @@ pub fn draggable_chrome(
         })
 }
 
-/// Min/max/close honoring the compositor's reported capabilities. Tiling
-/// compositors (Hyprland, Sway, …) manage their own windows and report no
-/// minimize support, so the whole group is hidden there; stacking WMs and
-/// Windows get the controls. Gating on the negotiated decoration mode is
-/// not an option: Hyprland answers xdg-decoration with server-side mode
-/// yet draws nothing itself.
+/// Controls for an app-drawn title bar. Minimize and maximize are shown only
+/// when the platform supports them; closing does not require either capability.
 pub fn window_controls(theme: &Theme, window: &Window) -> Div {
     window_controls_with_close(theme, window, |_, window, _| window.remove_window())
 }
@@ -64,9 +60,6 @@ pub fn window_controls_with_close(
 ) -> Div {
     let supported = window.window_controls();
     let maximized = window.is_maximized();
-
-    let is_windows = cfg!(target_os = "windows");
-    let show_controls = is_windows || supported.minimize;
 
     let control = |id: &'static str,
                    icon: Icon,
@@ -88,7 +81,7 @@ pub fn window_controls_with_close(
     };
 
     let mut controls = div().flex().items_center().gap(px(theme.space2));
-    if show_controls && (is_windows || supported.minimize) {
+    if supported.minimize {
         controls = controls.child(control(
             "chrome-minimize",
             Icon::Minus,
@@ -97,7 +90,7 @@ pub fn window_controls_with_close(
             |_, window, _| window.minimize_window(),
         ));
     }
-    if show_controls && (is_windows || supported.maximize) {
+    if supported.maximize {
         controls = controls.child(control(
             "chrome-maximize",
             if maximized { Icon::Copy } else { Icon::Square },
@@ -106,14 +99,11 @@ pub fn window_controls_with_close(
             |_, window, _| window.zoom_window(),
         ));
     }
-    if show_controls {
-        controls = controls.child(control(
-            "chrome-close",
-            Icon::X,
-            theme.danger,
-            mix_color(theme.surface_raised, theme.danger, 0.14),
-            close,
-        ));
-    }
-    controls
+    controls.child(control(
+        "chrome-close",
+        Icon::X,
+        theme.danger,
+        mix_color(theme.surface_raised, theme.danger, 0.14),
+        close,
+    ))
 }

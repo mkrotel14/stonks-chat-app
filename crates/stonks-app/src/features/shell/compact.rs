@@ -1,7 +1,7 @@
 //! Compact home routes, independent of the wide shell's automatic selection.
 use super::*;
+use crate::desktop::main_window_drag_region;
 use stonks_core::connection::{AppSnapshot, ClientServer};
-use stonks_ui::components::draggable_chrome;
 
 pub(super) const TAB_BOTTOM_MARGIN: f32 = 12.;
 
@@ -147,7 +147,7 @@ impl ShellView {
             .when(back, |header| {
                 header.child(self.compact_back_button(theme, cx))
             })
-            .child(draggable_chrome(
+            .child(main_window_drag_region(
                 div()
                     .id("compact-title")
                     .flex_1()
@@ -170,10 +170,7 @@ impl ShellView {
                         })),
                 )
             })
-            .when(
-                window.window_controls().minimize || cfg!(target_os = "windows"),
-                |header| header.child(crate::desktop::main_window_controls(&theme, window)),
-            )
+            .children(crate::desktop::main_window_controls(&theme, window))
     }
 
     pub(super) fn compact_back_button(&self, theme: Theme, cx: &mut Context<Self>) -> Button {

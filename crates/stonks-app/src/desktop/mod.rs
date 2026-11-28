@@ -16,7 +16,7 @@ pub(crate) use startup::{set_start_with_computer, starts_with_computer};
 
 use crate::features::app::AppView;
 use gpui_kit::{
-    px, size, AnyWindowHandle, App, AppContext, Global, QuitMode, TitlebarOptions, Window,
+    px, size, AnyWindowHandle, App, AppContext, Global, QuitMode, Styled, TitlebarOptions, Window,
     WindowDecorations, WindowOptions,
 };
 use std::{
@@ -38,11 +38,69 @@ fn update_blocks_close(cx: &App) -> bool {
     })
 }
 
-pub(crate) fn main_window_controls(theme: &stonks_ui::Theme, window: &Window) -> gpui_kit::Div {
-    stonks_ui::components::window_controls_with_close(theme, window, |_, window, cx| {
-        if !update_blocks_close(cx) {
-            window.remove_window();
-        }
+#[cfg(any(target_os = "linux", test))]
+fn is_tiling_desktop(desktop: &str) -> bool {
+    desktop.split(':').any(|name| {
+        ["Hyprland", "Omarchy", "sway", "niri", "i3"]
+            .iter()
+            .any(|tiler| name.trim().eq_ignore_ascii_case(tiler))
+    })
+}
+
+fn prefers_client_chrome() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use std::sync::OnceLock;
+        static PREFERENCE: OnceLock<bool> = OnceLock::new();
+        *PREFERENCE.get_or_init(|| {
+            [
+                "XDG_CURRENT_DESKTOP",
+                "XDG_SESSION_DESKTOP",
+                "DESKTOP_SESSION",
+            ]
+            .iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .any(|desktop| is_tiling_desktop(&desktop))
+                || std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some_and(|v| !v.is_empty())
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
+fn uses_main_client_chrome(window: &Window) -> bool {
+    // Wayland compositors without server-side decorations (e.g. GNOME)
+    // need the same client chrome fallback as sessions that request it.
+    cfg!(target_os = "linux")
+        && (prefers_client_chrome()
+            || matches!(
+                window.window_decorations(),
+                gpui_kit::Decorations::Client { .. }
+            ))
+}
+
+pub(crate) fn main_window_drag_region(
+    element: gpui_kit::Stateful<gpui_kit::Div>,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    if uses_main_client_chrome(window) {
+        stonks_ui::components::draggable_chrome(element, window, cx)
+    } else {
+        element.h_full()
+    }
+}
+
+pub(crate) fn main_window_controls(
+    theme: &stonks_ui::Theme,
+    window: &Window,
+) -> Option<gpui_kit::Div> {
+    uses_main_client_chrome(window).then(|| {
+        stonks_ui::components::window_controls_with_close(theme, window, |_, window, cx| {
+            if !update_blocks_close(cx) {
+                window.remove_window();
+            }
+        })
     })
 }
 
@@ -201,7 +259,11 @@ impl Lifecycle {
         let minimized = self.minimize_on_start.get();
         let bounds = self.state.borrow().bounds(cx);
         let options = WindowOptions {
-            window_decorations: Some(WindowDecorations::Client),
+            window_decorations: Some(if prefers_client_chrome() {
+                WindowDecorations::Client
+            } else {
+                WindowDecorations::Server
+            }),
             titlebar: Some(TitlebarOptions {
                 title: Some("Stonks Chat".into()),
                 ..Default::default()
@@ -492,7 +554,17 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::should_start_minimized;
+    use super::{is_tiling_desktop, should_start_minimized};
+
+    #[test]
+    fn recognizes_tiling_session_names() {
+        for desktop in ["Hyprland", "omarchy", "wlroots:Sway", "niri", "i3"] {
+            assert!(is_tiling_desktop(desktop), "{desktop}");
+        }
+        for desktop in ["", "GNOME", "ubuntu:GNOME", "KDE", "not-hyprland"] {
+            assert!(!is_tiling_desktop(desktop), "{desktop}");
+        }
+    }
 
     #[test]
     fn startup_minimizes_only_when_requested_supported_and_not_opening_a_link() {

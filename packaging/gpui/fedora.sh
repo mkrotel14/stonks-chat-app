@@ -74,9 +74,10 @@ case ${1:?Pass build or smoke} in
     shopt -s nullglob
     drivers=(/usr/share/vulkan/icd.d/lvp_icd*.json)
     [[ ${#drivers[@]} == 1 ]]
-    export VK_DRIVER_FILES=${drivers[0]}
-    dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' \
-      bash "$repo/packaging/gpui/smoke-linux.sh" /usr/bin/stonks-app
+    # Work around Fedora 44's Lavapipe/LLVM shader JIT crash without skipping Vulkan rendering.
+    VK_DRIVER_FILES=${drivers[0]} LP_NATIVE_VECTOR_WIDTH=128 GALLIVM_PERF=nopt \
+      dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' \
+        bash "$repo/packaging/gpui/smoke-linux.sh" /usr/bin/stonks-app --require-stable-window
     dnf -y remove stonks-gpui
     test ! -e /usr/bin/stonks-app
     ;;

@@ -13,12 +13,12 @@ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
   bash packaging/gpui/linux.sh crates/stonks-app/target/release/stonks-app /tmp/gpui-artifacts
 ```
 
-All three artifacts carry the same release binary, desktop entry, icon and notices. The script validates ELF architecture and linkage, checks pacman metadata, extracts packaged files and compares payloads, and requires a visible window from each packaged launcher under Xvfb. The AppImage runs in extract-and-run mode for CI; FUSE mounting is not tested. The archived AppImage runtime is fetched by asset ID and checked by SHA-256, so if upstream removes the asset the build fails closed.
+All three packages carry the same release binary, desktop entry, icon and notices. The script validates ELF architecture and linkage, checks pacman metadata, compares extracted payloads, and requires a visible window from each launcher under Xvfb. CI runs the `arch` and `appimage` modes separately, uploading `gpui-arch-x86_64` before the AppImage step starts, then `gpui-appimage-x86_64` if it passes. The AppImage runs in extract-and-run mode for CI; FUSE mounting is not tested. The runtime download tries the upstream release URL first and the pinned GitHub asset ID second. Both paths require the same pinned SHA-256; a changed upstream runtime cannot silently enter the build.
 
 - `stonks-gpui-<version>-1-x86_64.pkg.tar.zst`: install with `pacman -U`; runtime packages are declared in the recipe.
 - `Stonks.GPUI_<version>_x86_64.AppImage`: a thin AppImage for hosts compatible with that same Arch baseline. It uses system libraries, Vulkan and GStreamer plugins; it is **not** a standalone cross-distribution bundle. Use the Arch recipe as the host dependency list. Use `--appimage-extract-and-run` when FUSE is unavailable.
 - `stonks-<version>-1-x86_64.pkg.tar.zst`: continuation of the GPUI bridge package. Preserves the `stonks` package identity and `/usr/bin/stonks` launcher. Do not install it alongside `stonks-gpui`.
-- `SHA256SUMS`: checksums of all three artifacts.
+- `SHA256SUMS`: checksums of the packages built by the selected mode (`all` by default).
 
 ### In-app updates
 
@@ -34,7 +34,7 @@ CI uses a digest-pinned Fedora 44 base and enables only the signed `fedora` rele
 
 On a managed Fedora 44 x86-64 install (RPM owns `/usr/bin/stonks-app`), the updater selects only the matching `stonks-gpui-<version>-<revision>.fc44.x86_64.rpm` release asset. It verifies the digest, RPM identity and executable before running `pkexec /usr/bin/dnf install -y <verified-package>`. It restarts only after RPM reports the exact selected package version. A polkit authentication agent is required; the updater does not change DNF signature policy.
 
-A fresh container installs through DNF with weak dependencies disabled, verifies RPM metadata/payload and ELF linkage, checks required GStreamer elements and executable tools, then uses D-Bus, Xvfb and Mesa software Vulkan to require a visible window from `/usr/bin/stonks-app`. It also checks that uninstall removes the binary. This is an X11 startup smoke test, not coverage of Wayland, hardware GPUs, actual media playback, voice, screen sharing, or authenticated use. It does not validate the Arch-built AppImage on Fedora or imply support for other distributions.
+A fresh container installs through DNF with weak dependencies disabled, verifies RPM metadata/payload and ELF linkage, checks required GStreamer elements and executable tools, then uses D-Bus, Xvfb and Mesa software Vulkan to require a window from `/usr/bin/stonks-app` that stays visible across multiple checks. The smoke environment works around a Fedora 44 Lavapipe shader-compiler crash; the RPM does not set these driver overrides. It also checks that uninstall removes the binary. This is an X11 startup smoke test, not coverage of Wayland, hardware GPUs, actual media playback, voice, screen sharing, or authenticated use. It does not validate the Arch-built AppImage on Fedora or imply support for other distributions.
 
 ## Windows x86_64 (unverified until native CI passes)
 

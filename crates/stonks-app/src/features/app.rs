@@ -4,11 +4,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::desktop::main_window_drag_region;
 use gpui_kit::*;
 use stonks_core::http::HttpPolicy;
 use stonks_core::server::CONFIG_FILE;
 use stonks_core::session::SessionStore;
-use stonks_ui::components::{draggable_chrome, Button, ButtonVariant};
+use stonks_ui::components::{Button, ButtonVariant};
 use stonks_ui::i18n::t;
 use stonks_ui::icons::Icon;
 use stonks_ui::{fonts, Theme};
@@ -306,12 +307,12 @@ impl AppView {
                     .left_0()
                     .right_0()
                     .flex()
-                    .child(draggable_chrome(
+                    .child(main_window_drag_region(
                         div().id("startup-drag-region").flex_1(),
                         window,
                         cx,
                     ))
-                    .child(crate::desktop::main_window_controls(theme, window)),
+                    .children(crate::desktop::main_window_controls(theme, window)),
             )
     }
 
@@ -424,7 +425,7 @@ impl Render for AppView {
                     .flex()
                     .items_center()
                     .px(px(22.))
-                    .child(draggable_chrome(
+                    .child(main_window_drag_region(
                         div()
                             .id("chrome-brand")
                             .flex()
@@ -447,7 +448,7 @@ impl Render for AppView {
                         window,
                         cx,
                     ))
-                    .child(draggable_chrome(
+                    .child(main_window_drag_region(
                         div().id("chrome-spacer").flex_1(),
                         window,
                         cx,
@@ -476,7 +477,7 @@ impl Render for AppView {
                                     button
                                 }
                             })
-                            .child(crate::desktop::main_window_controls(&theme, window)),
+                            .children(crate::desktop::main_window_controls(&theme, window)),
                     ),
             )
             .child(

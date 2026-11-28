@@ -5,8 +5,8 @@ use super::super::{
     update::header_update,
     *,
 };
+use crate::desktop::main_window_drag_region;
 use stonks_core::connection::{AppSnapshot, ClientChannel, ClientServer};
-use stonks_ui::components::draggable_chrome;
 
 impl ShellView {
     pub(in crate::features::shell) fn close_message_panel(
@@ -166,7 +166,7 @@ impl ShellView {
                                         })),
                                 )
                             })
-                            .child(draggable_chrome(
+                            .child(main_window_drag_region(
                                 div()
                                     .id("pane-header-drag")
                                     .flex()
@@ -270,10 +270,7 @@ impl ShellView {
                                 )
                             }),
                     )
-                    .when(
-                        window.window_controls().minimize || cfg!(target_os = "windows"),
-                        |header| header.child(crate::desktop::main_window_controls(&theme, window)),
-                    ),
+                    .children(crate::desktop::main_window_controls(&theme, window)),
             )
             .children(read_error.map(|error| {
                 div()
