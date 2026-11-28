@@ -221,7 +221,8 @@ impl AppView {
                 }
             });
             self.screen = Screen::Startup(StartupPhase::OfferingUpdate);
-            self.startup_update = Some((details, subscription));
+            self.startup_update = Some((details.clone(), subscription));
+            details.update(cx, |details, cx| details.install_on_startup(window, cx));
             cx.notify();
         } else {
             self.restore_after_update_check(cx);

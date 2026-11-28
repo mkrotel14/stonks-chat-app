@@ -160,6 +160,24 @@ impl Details {
         cx.notify();
     }
 
+    pub(crate) fn install_on_startup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(all(
+            target_arch = "x86_64",
+            any(target_os = "linux", target_os = "windows")
+        ))]
+        {
+            use super::managed::Kind;
+            let automatic = matches!(
+                &self.updater.read(cx).status,
+                Status::Available(candidate) if matches!(candidate.kind(), Kind::Rpm | Kind::Windows)
+            );
+            if automatic {
+                self.install(window, cx);
+            }
+        }
+        let _ = (window, cx);
+    }
+
     fn install(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(all(
             target_arch = "x86_64",

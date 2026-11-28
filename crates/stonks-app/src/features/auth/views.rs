@@ -89,12 +89,7 @@ pub fn welcome(theme: &Theme, cx: &mut Context<AuthScreen>) -> Div {
         .child(feedback(theme, None, None))
 }
 
-pub fn signed_in(
-    theme: &Theme,
-    username: &str,
-    busy: bool,
-    cx: &mut Context<AuthScreen>,
-) -> Div {
+pub fn signed_in(theme: &Theme, username: &str, busy: bool, cx: &mut Context<AuthScreen>) -> Div {
     div()
         .flex()
         .flex_col()
@@ -153,11 +148,10 @@ fn submit(
     theme: &Theme,
     label: String,
     busy_label: String,
+    busy: bool,
     disabled: bool,
     cx: &mut Context<AuthScreen>,
 ) -> Button {
-    let screen = cx.entity().read(cx);
-    let busy = screen.busy;
     Button::new("submit", *theme)
         .variant(ButtonVariant::Primary)
         .label(if busy { busy_label } else { label })
@@ -242,8 +236,13 @@ pub fn form(screen: &mut AuthScreen, theme: &Theme, cx: &mut Context<AuthScreen>
                     back(theme, AuthView::Welcome, cx),
                     submit(
                         theme,
-                        if mfa { t("auth.verify") } else { t("auth.login") },
+                        if mfa {
+                            t("auth.verify")
+                        } else {
+                            t("auth.login")
+                        },
                         t("auth.wait"),
+                        busy,
                         false,
                         cx,
                     ),
@@ -272,7 +271,14 @@ pub fn form(screen: &mut AuthScreen, theme: &Theme, cx: &mut Context<AuthScreen>
                 .child(feedback(theme, notice, error))
                 .child(actions(
                     back(theme, AuthView::Welcome, cx),
-                    submit(theme, t("auth.createAccount"), t("auth.creating"), captcha, cx),
+                    submit(
+                        theme,
+                        t("auth.createAccount"),
+                        t("auth.creating"),
+                        busy,
+                        captcha,
+                        cx,
+                    ),
                 ))
                 .into_any_element()
         }
@@ -289,7 +295,14 @@ pub fn form(screen: &mut AuthScreen, theme: &Theme, cx: &mut Context<AuthScreen>
                 .child(feedback(theme, notice, error))
                 .child(actions(
                     back(theme, AuthView::Login, cx),
-                    submit(theme, t("auth.sendEmail"), t("auth.sending"), captcha, cx),
+                    submit(
+                        theme,
+                        t("auth.sendEmail"),
+                        t("auth.sending"),
+                        busy,
+                        captcha,
+                        cx,
+                    ),
                 ))
                 .into_any_element()
         }
@@ -301,7 +314,14 @@ pub fn form(screen: &mut AuthScreen, theme: &Theme, cx: &mut Context<AuthScreen>
             .child(feedback(theme, notice, error))
             .child(actions(
                 back(theme, AuthView::Login, cx),
-                submit(theme, t("auth.verify"), t("common.verifying"), false, cx),
+                submit(
+                    theme,
+                    t("auth.verify"),
+                    t("common.verifying"),
+                    busy,
+                    false,
+                    cx,
+                ),
             ))
             .into_any_element(),
         AuthView::ResetConfirm => div()
@@ -323,7 +343,14 @@ pub fn form(screen: &mut AuthScreen, theme: &Theme, cx: &mut Context<AuthScreen>
             .child(feedback(theme, notice, error))
             .child(actions(
                 back(theme, AuthView::Login, cx),
-                submit(theme, t("auth.updatePassword"), t("auth.updating"), false, cx),
+                submit(
+                    theme,
+                    t("auth.updatePassword"),
+                    t("auth.updating"),
+                    busy,
+                    false,
+                    cx,
+                ),
             ))
             .into_any_element(),
         AuthView::Onboarding => div()
@@ -343,7 +370,14 @@ pub fn form(screen: &mut AuthScreen, theme: &Theme, cx: &mut Context<AuthScreen>
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| this.logout(cx))),
                     )
-                    .child(submit(theme, t("auth.continue"), t("auth.saving"), false, cx)),
+                    .child(submit(
+                        theme,
+                        t("auth.continue"),
+                        t("auth.saving"),
+                        busy,
+                        false,
+                        cx,
+                    )),
             )
             .into_any_element(),
         AuthView::Welcome => unreachable!("welcome renders separately"),

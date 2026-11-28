@@ -2,7 +2,7 @@
 license = "Apache-2.0"
 repository = "https://github.com/mkrotel14/stonks-chat-app"
 name = "stonks-app"
-version = "4.0.6"
+version = "4.0.7"
 edition = "2021"
 publish = false
 
