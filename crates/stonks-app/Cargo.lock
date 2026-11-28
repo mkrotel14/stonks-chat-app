@@ -7301,7 +7301,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stonks-app"
-version = "4.0.5"
+version = "4.0.6"
 dependencies = [
  "futures-channel",
  "futures-util",

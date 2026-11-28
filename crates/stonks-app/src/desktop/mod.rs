@@ -41,13 +41,13 @@ fn update_blocks_close(cx: &App) -> bool {
 #[cfg(any(target_os = "linux", test))]
 fn is_tiling_desktop(desktop: &str) -> bool {
     desktop.split(':').any(|name| {
-        ["Hyprland", "Omarchy", "sway", "niri", "i3"]
+        ["Hyprland", "Ryoku", "Omarchy", "sway", "niri", "i3"]
             .iter()
             .any(|tiler| name.trim().eq_ignore_ascii_case(tiler))
     })
 }
 
-fn prefers_client_chrome() -> bool {
+fn is_tiling_session() -> bool {
     #[cfg(target_os = "linux")]
     {
         use std::sync::OnceLock;
@@ -68,15 +68,18 @@ fn prefers_client_chrome() -> bool {
     false
 }
 
+fn main_client_chrome(linux: bool, tiling: bool, decorations: gpui_kit::Decorations) -> bool {
+    // GNOME Wayland can negotiate client decorations, but a tiling session
+    // should own window controls even if it reports that same decoration mode.
+    linux && !tiling && matches!(decorations, gpui_kit::Decorations::Client { .. })
+}
+
 fn uses_main_client_chrome(window: &Window) -> bool {
-    // Wayland compositors without server-side decorations (e.g. GNOME)
-    // need the same client chrome fallback as sessions that request it.
-    cfg!(target_os = "linux")
-        && (prefers_client_chrome()
-            || matches!(
-                window.window_decorations(),
-                gpui_kit::Decorations::Client { .. }
-            ))
+    main_client_chrome(
+        cfg!(target_os = "linux"),
+        is_tiling_session(),
+        window.window_decorations(),
+    )
 }
 
 pub(crate) fn main_window_drag_region(
@@ -259,11 +262,7 @@ impl Lifecycle {
         let minimized = self.minimize_on_start.get();
         let bounds = self.state.borrow().bounds(cx);
         let options = WindowOptions {
-            window_decorations: Some(if prefers_client_chrome() {
-                WindowDecorations::Client
-            } else {
-                WindowDecorations::Server
-            }),
+            window_decorations: Some(WindowDecorations::Server),
             titlebar: Some(TitlebarOptions {
                 title: Some("Stonks Chat".into()),
                 ..Default::default()
@@ -554,11 +553,32 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_tiling_desktop, should_start_minimized};
+    use super::{is_tiling_desktop, main_client_chrome, should_start_minimized};
+    use gpui_kit::Decorations;
+
+    #[test]
+    fn only_non_tiling_linux_uses_client_decoration_fallback() {
+        let client = Decorations::Client {
+            tiling: Default::default(),
+        };
+        assert!(!main_client_chrome(true, true, client));
+        assert!(!main_client_chrome(true, true, Decorations::Server));
+        assert!(!main_client_chrome(false, false, client));
+        assert!(!main_client_chrome(true, false, Decorations::Server));
+        assert!(main_client_chrome(true, false, client));
+    }
 
     #[test]
     fn recognizes_tiling_session_names() {
-        for desktop in ["Hyprland", "omarchy", "wlroots:Sway", "niri", "i3"] {
+        for desktop in [
+            "Hyprland",
+            "Ryoku:Hyprland",
+            "ryoku",
+            "omarchy",
+            "wlroots:Sway",
+            "niri",
+            "i3",
+        ] {
             assert!(is_tiling_desktop(desktop), "{desktop}");
         }
         for desktop in ["", "GNOME", "ubuntu:GNOME", "KDE", "not-hyprland"] {
